@@ -34,8 +34,11 @@ local function rageDir(buf: buffer, off: number): Vector3
 	return Vector3.new(x, z, -y) -- direction: no scale
 end
 
-local function buildGeometry(buf: buffer, g: VehicleWire.Geometry): EditableMesh
-	local mesh = AssetService:CreateEditableMesh()
+local function buildGeometry(buf: buffer, g: VehicleWire.Geometry): EditableMesh?
+	local mesh: EditableMesh? = AssetService:CreateEditableMesh()
+	if not mesh then
+		return nil -- client EditableMesh memory budget exhausted
+	end
 
 	local vids = table.create(g.vertexCount) :: { number }
 	for v = 0, g.vertexCount - 1 do
@@ -103,7 +106,15 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	}
 	for i, g in vehicle.geometries do
 		local mesh = buildGeometry(vehicle.buffer, g)
+		if not mesh then
+			warn(`[GtaVehicle] skipped geometry {i}: EditableMesh budget exhausted`)
+			continue
+		end
 		local part = AssetService:CreateMeshPartAsync(Content.fromObject(mesh), options)
+		-- Free the EditableMesh immediately: the MeshPart is now independent,
+		-- and EditableMeshes count against a tight client memory budget. Keeping
+		-- all of them alive at once is what exhausted the budget.
+		mesh:Destroy()
 		part.Anchored = true
 		part.Name = `geom{i}_shader{g.shaderIndex}`
 		part.Parent = model
