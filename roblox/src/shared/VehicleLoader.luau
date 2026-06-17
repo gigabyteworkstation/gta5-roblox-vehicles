@@ -110,11 +110,20 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 			warn(`[GtaVehicle] skipped geometry {i}: EditableMesh budget exhausted`)
 			continue
 		end
-		local part = AssetService:CreateMeshPartAsync(Content.fromObject(mesh), options)
-		-- Free the EditableMesh immediately: the MeshPart is now independent,
-		-- and EditableMeshes count against a tight client memory budget. Keeping
-		-- all of them alive at once is what exhausted the budget.
+
+		-- Bake the editable mesh into STATIC DataModel-scoped content. The
+		-- resulting content is an independent copy, so we can destroy the
+		-- EditableMesh afterward to free the client memory budget WITHOUT
+		-- breaking the part (CreateMeshPartAsync keeps a live link to an
+		-- EditableMesh, but not to baked static content).
+		local res, staticContent = AssetService:CreateDataModelContentAsync(Content.fromObject(mesh))
 		mesh:Destroy()
+		if res ~= Enum.CreateContentResult.Success then
+			warn(`[GtaVehicle] geometry {i}: bake failed ({res})`)
+			continue
+		end
+
+		local part = AssetService:CreateMeshPartAsync(staticContent, options)
 		part.Anchored = true
 		part.Name = `geom{i}_shader{g.shaderIndex}`
 		part.Parent = model
