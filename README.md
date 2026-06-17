@@ -41,10 +41,15 @@ Uses [Rojo](https://rojo.space). See SETUP below.
 1. Edit `roblox/src/server/init.server.luau` → set `SERVER_URL` to the backend
    machine (`http://<lan-ip>:5000`).
 2. In Studio: Game Settings → Security → **Allow HTTP Requests**.
-3. `rojo serve` from `roblox/`, connect via the Rojo Studio plugin, Play.
+3. `rojo serve` from `roblox/`, connect via the Rojo Studio plugin, press **Play**.
 
-A `zion_hi` Model appears at (0, 10, 0). (The test script runs on the server,
-since `HttpService:GetAsync` is server-only.)
+Flow: the **server** proxies the HTTP fetch over a `GetVehicleData` RemoteFunction;
+the **client** receives the bytes and builds the MeshParts locally. (A runtime
+`EditableMesh` built on the server does not replicate, so the client must build
+it — and `MeshPart`s need `RenderFidelity.Precise` to show their faces.)
+
+A `zion_hi` Model appears at (0, 10, 0). Tune `STUDS_PER_METER` in
+`VehicleLoader.luau` to resize.
 
 ## Status
 

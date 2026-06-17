@@ -8,8 +8,15 @@
       }
     },
     "ServerScriptService": {
-      "GtaVehicleTest": {
+      "GtaVehicleServer": {
         "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "GtaVehicleClient": {
+          "$path": "src/client"
+        }
       }
     }
   }

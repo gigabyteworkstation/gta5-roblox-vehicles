@@ -34,8 +34,8 @@ export type Vehicle = {
 
 local MAGIC = "GVEH"
 
-function VehicleWire.parse(data: string): Vehicle
-	local buf = buffer.fromstring(data)
+function VehicleWire.parse(data: buffer | string): Vehicle
+	local buf = if type(data) == "string" then buffer.fromstring(data) else data
 	local r = BinaryReader.new(buf)
 
 	local magic = r:fixedString(4)
