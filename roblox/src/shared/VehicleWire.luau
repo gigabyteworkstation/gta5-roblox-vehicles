@@ -45,7 +45,7 @@ function VehicleWire.parse(data: string): Vehicle
 	local geomCount = r:u32()
 	local texCount = r:u32()
 
-	local geometries: { Geometry } = table.create(geomCount)
+	local geometries: { Geometry } = table.create(geomCount) :: { Geometry }
 	for i = 1, geomCount do
 		local shaderIndex = r:u16()
 		local flags = r:u8()
@@ -83,7 +83,7 @@ function VehicleWire.parse(data: string): Vehicle
 		}
 	end
 
-	local textures: { Texture } = table.create(texCount)
+	local textures: { Texture } = table.create(texCount) :: { Texture }
 	for i = 1, texCount do
 		local nameLen = r:u16()
 		local name = r:fixedString(nameLen)

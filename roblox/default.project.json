@@ -7,11 +7,9 @@
         "$path": "src/shared"
       }
     },
-    "StarterPlayer": {
-      "StarterPlayerScripts": {
-        "GtaVehicleTest": {
-          "$path": "src/client"
-        }
+    "ServerScriptService": {
+      "GtaVehicleTest": {
+        "$path": "src/server"
       }
     }
   }

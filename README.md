@@ -38,12 +38,13 @@ cargo run -- serve --addr 0.0.0.0:5000   # serve to Roblox
 
 Uses [Rojo](https://rojo.space). See SETUP below.
 
-1. Edit `roblox/src/client/init.client.luau` → set `SERVER_URL` to the backend
+1. Edit `roblox/src/server/init.server.luau` → set `SERVER_URL` to the backend
    machine (`http://<lan-ip>:5000`).
 2. In Studio: Game Settings → Security → **Allow HTTP Requests**.
 3. `rojo serve` from `roblox/`, connect via the Rojo Studio plugin, Play.
 
-A `zion_hi` Model appears at (0, 5, 0).
+A `zion_hi` Model appears at (0, 10, 0). (The test script runs on the server,
+since `HttpService:GetAsync` is server-only.)
 
 ## Status
 
