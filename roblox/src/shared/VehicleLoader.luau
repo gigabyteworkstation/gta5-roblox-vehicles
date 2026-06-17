@@ -99,7 +99,13 @@ function VehicleLoader.load(name: string, baseUrl: string, parent: Instance?): M
 	local model = Instance.new("Model")
 	model.Name = name
 
-	local options = { CollisionFidelity = Enum.CollisionFidelity.Box }
+	-- RenderFidelity.Precise is required: a runtime EditableMesh has no
+	-- precomputed LOD, so Automatic fidelity shows a placeholder box instead
+	-- of the actual faces.
+	local options = {
+		CollisionFidelity = Enum.CollisionFidelity.Box,
+		RenderFidelity = Enum.RenderFidelity.Precise,
+	}
 	for i, g in vehicle.geometries do
 		local mesh, center = buildGeometry(vehicle.buffer, g)
 		local part = AssetService:CreateMeshPartAsync(Content.fromObject(mesh), options)
