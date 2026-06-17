@@ -1,0 +1,26 @@
+# ── NEVER commit game data / keys (legal + secrets) ───────────────────────
+*.dat
+*.rpf
+*.yft
+*.ytd
+*.exe
+GTA5.exe
+
+# Decoded asset output (may contain Rockstar-owned data)
+out/
+backend/out/
+
+# ── Vendored references (large; not relied upon) ──────────────────────────
+backend/vendor/
+
+# ── Rust build ────────────────────────────────────────────────────────────
+target/
+backend/target/
+**/*.rs.bk
+
+# ── OS / editor cruft ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

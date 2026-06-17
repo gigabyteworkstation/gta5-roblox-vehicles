@@ -1,0 +1,33 @@
+[workspace]
+# vendor/rpf-cli is kept as reference only; don't pull it into our build.
+exclude = ["vendor"]
+
+[package]
+name = "gta-vehicle-backend"
+version = "0.1.0"
+edition = "2021"
+description = "Decodes GTA5 vehicle meshes/textures from RPF and serves them to Roblox"
+license = "MIT"
+
+[[bin]]
+name = "gtaveh"
+path = "src/main.rs"
+
+[dependencies]
+# The real RPF library (rpf-cli is just a thin CLI over this). Gives us
+# RpfArchive, GtaKeys, extract_entry, parse_ytd, etc. across RPF0-8.
+rpf-archive = "0.6.0"
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+# Resources are stored raw-deflate; rpf-archive's extract() leaves them compressed.
+flate2 = "1.1"
+# BC/DXT block decompression for textures (BC1-7).
+texture2ddecoder = "0.1"
+# PNG output for verifying decoded textures outside Roblox.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# HTTP server for the Roblox client.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.7"
+
+[profile.release]
+opt-level = 3
