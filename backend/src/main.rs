@@ -5,6 +5,7 @@ mod archive;
 mod pipeline;
 mod rsc7;
 mod server;
+mod skeleton;
 mod textures;
 mod wire;
 mod yft;
@@ -75,6 +76,11 @@ enum Commands {
         name: String,
         #[arg(long, default_value = "out")]
         out: PathBuf,
+    },
+
+    /// Parse and print a vehicle's skeleton (bones) for verification
+    Skeleton {
+        name: String,
     },
 
     /// Run the HTTP server for the Roblox client
@@ -282,6 +288,16 @@ fn run() -> Result<()> {
                 bytes.len() as f64 / 1_048_576.0,
                 dest.display()
             );
+        }
+
+        Commands::Skeleton { name } => {
+            let yft = format!("{name}.yft");
+            let file = veh.find_file(&yft).with_context(|| format!("{yft} not found"))?;
+            let rsc = veh.extract(file, Some(&keys))?;
+            let r = Rsc7::parse(&rsc)?;
+            let bones = skeleton::parse(&r)?;
+            println!("\n{yft}:");
+            skeleton::print_tree(&bones);
         }
 
         Commands::Serve { addr } => {
