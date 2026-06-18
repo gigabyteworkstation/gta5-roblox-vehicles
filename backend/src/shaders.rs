@@ -36,9 +36,15 @@ pub fn embedded_txd_ptr(rsc: &Rsc7) -> u64 {
         .unwrap_or(0)
 }
 
-/// Diffuse texture name per shader index (None if the shader has no texture
-/// parameter, e.g. runtime-coloured paint).
-pub fn diffuse_names(rsc: &Rsc7) -> Result<Vec<Option<String>>> {
+#[derive(Default, Clone)]
+pub struct ShaderInfo {
+    pub diffuse: Option<String>, // 1st texture param
+    pub normal: Option<String>,  // 2nd texture param (bump/normal)
+}
+
+/// Texture names per shader index. Vehicle shaders list textures in a stable
+/// order: diffuse, then bump/normal, then spec/etc.
+pub fn shader_infos(rsc: &Rsc7) -> Result<Vec<ShaderInfo>> {
     let sg = shader_group(rsc)?;
     if sg == 0 {
         return Ok(vec![]);
@@ -49,31 +55,29 @@ pub fn diffuse_names(rsc: &Rsc7) -> Result<Vec<Option<String>>> {
 
     let mut out = Vec::with_capacity(count);
     for &sh in &shader_ptrs {
-        if sh == 0 {
-            out.push(None);
-            continue;
+        let mut info = ShaderInfo::default();
+        if sh != 0 {
+            let params_ptr = rsc.u64_at(sh, SHADER_PARAMS_PTR).unwrap_or(0);
+            let pcount = rsc.u8_at(sh, SHADER_PARAM_COUNT).unwrap_or(0) as usize;
+            let mut tex_names = Vec::new();
+            for i in 0..pcount {
+                let p = params_ptr + i as u64 * PARAM_SIZE;
+                if rsc.u8_at(p, PARAM_DATATYPE).unwrap_or(1) != 0 {
+                    continue;
+                }
+                let tex = rsc.u64_at(p, PARAM_DATAPTR).unwrap_or(0);
+                if tex == 0 {
+                    continue;
+                }
+                let n = rsc.str_at(rsc.u64_at(tex, TEX_NAME_PTR).unwrap_or(0));
+                if !n.is_empty() {
+                    tex_names.push(n);
+                }
+            }
+            info.diffuse = tex_names.first().cloned();
+            info.normal = tex_names.get(1).cloned();
         }
-        let params_ptr = rsc.u64_at(sh, SHADER_PARAMS_PTR)?;
-        let pcount = rsc.u8_at(sh, SHADER_PARAM_COUNT)? as usize;
-
-        let mut name = None;
-        for i in 0..pcount {
-            let p = params_ptr + i as u64 * PARAM_SIZE;
-            if rsc.u8_at(p, PARAM_DATATYPE).unwrap_or(1) != 0 {
-                continue; // not a texture
-            }
-            let tex = rsc.u64_at(p, PARAM_DATAPTR).unwrap_or(0);
-            if tex == 0 {
-                continue;
-            }
-            let nptr = rsc.u64_at(tex, TEX_NAME_PTR).unwrap_or(0);
-            let n = rsc.str_at(nptr);
-            if !n.is_empty() {
-                name = Some(n);
-                break; // first texture param = diffuse
-            }
-        }
-        out.push(name);
+        out.push(info);
     }
     Ok(out)
 }

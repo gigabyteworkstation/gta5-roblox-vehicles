@@ -62,30 +62,18 @@ local function buildTextureCache(vehicle: VehicleWire.Vehicle): { [number]: Cont
 	return cache
 end
 
+-- Group a part's geometries by diffuse texture (one MeshPart per visible
+-- texture, each gets its own SurfaceAppearance).
 local function groupByTexture(geometries: { VehicleWire.Geometry }): { [number]: { VehicleWire.Geometry } }
 	local groups: { [number]: { VehicleWire.Geometry } } = {}
 	for _, g in geometries do
-		local ti = g.textureIndex
+		local ti = g.diffuseIndex
 		if not groups[ti] then
 			groups[ti] = {}
 		end
 		table.insert(groups[ti], g)
 	end
 	return groups
-end
-
-local function dominantTexture(geometries: { VehicleWire.Geometry }): number
-	local tris: { [number]: number } = {}
-	for _, g in geometries do
-		tris[g.textureIndex] = (tris[g.textureIndex] or 0) + g.indexCount
-	end
-	local best, bestN = -1, -1
-	for ti, n in tris do
-		if n > bestN then
-			best, bestN = ti, n
-		end
-	end
-	return best
 end
 
 -- Build ONE MeshPart from a list of geometries merged together.
@@ -145,10 +133,21 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }):
 	return AssetService:CreateMeshPartAsync(content, BAKE_OPTIONS)
 end
 
-local function applyTexture(part: MeshPart, cache: { [number]: Content }, ti: number)
-	if cache[ti] then
-		part.TextureContent = cache[ti]
+-- Apply a material via SurfaceAppearance: diffuse ColorMap, optional NormalMap,
+-- and per-pixel transparency for glass (uses the diffuse alpha channel).
+local function applyMaterial(part: MeshPart, cache: { [number]: Content }, geom: VehicleWire.Geometry)
+	local diffuse = cache[geom.diffuseIndex]
+	if not diffuse then
+		return
 	end
+	local sa = Instance.new("SurfaceAppearance")
+	sa.ColorMap = diffuse
+	local normal = cache[geom.normalMapIndex]
+	if normal then
+		sa.NormalMap = normal
+	end
+	sa.AlphaMode = if geom.glass then Enum.AlphaMode.Transparency else Enum.AlphaMode.Overlay
+	sa.Parent = part
 end
 
 function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model
@@ -162,11 +161,11 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	local bodyBase: BasePart? = nil
 	for _, p in vehicle.parts do
 		if not p.articulated then
-			for ti, geoms in groupByTexture(p.geometries) do
+			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
 					part.Anchored = true
-					applyTexture(part, cache, ti)
+					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
 					part.Parent = model
 					if not bodyBase then
@@ -184,12 +183,12 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		if p.articulated and p.hinge and bodyBase then
 			local h = p.hinge
 			local root: BasePart? = nil
-			for ti, geoms in groupByTexture(p.geometries) do
+			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
 					part.Anchored = true
 					part.CanCollide = false
-					applyTexture(part, cache, ti)
+					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
 					part.Parent = model
 					table.insert(articulated, part)

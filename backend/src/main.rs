@@ -352,14 +352,19 @@ fn run() -> Result<()> {
             let rsc = veh.extract(file, Some(&keys))?;
             let r = Rsc7::parse(&rsc)?;
             let mesh = yft::decode(&r)?;
-            let names = shaders::diffuse_names(&r)?;
+            let infos = shaders::shader_infos(&r)?;
             let tex_map = pipeline::texture_map(&veh, &keys, name, &r);
-            println!("\n{yft}: {} shaders, {} textures available", names.len(), tex_map.len());
+            println!("\n{yft}: {} shaders, {} textures available", infos.len(), tex_map.len());
 
             let mut seen = std::collections::BTreeSet::new();
             for g in &mesh.geometries {
-                if let Some(Some(tex)) = names.get(g.shader_index as usize) {
-                    seen.insert(tex.clone());
+                if let Some(info) = infos.get(g.shader_index as usize) {
+                    if let Some(d) = &info.diffuse {
+                        seen.insert(d.clone());
+                    }
+                    if let Some(n) = &info.normal {
+                        seen.insert(n.clone());
+                    }
                 }
             }
             let (mut found, mut missing) = (0, 0);

@@ -63,32 +63,39 @@ pub fn build_vehicle(
     let world = skeleton::world_transforms(&bones);
     let grouped = parts::group(&mesh, &bones, &world);
 
-    // Resolve each shader's diffuse texture → a deduped, downscaled texture list,
-    // and a per-shader index into it. Off by default (RGBA is large).
+    // Resolve each shader's diffuse + normal textures → a deduped, full-res
+    // texture list and a per-shader Material. Off by default (RGBA is large).
     let mut textures: Vec<DecodedTexture> = Vec::new();
-    let mut shader_tex_index: Vec<i16> = Vec::new();
+    let mut materials: Vec<wire::Material> = Vec::new();
     if include_textures {
-        let names = shaders::diffuse_names(&r).unwrap_or_default();
+        let infos = shaders::shader_infos(&r).unwrap_or_default();
         let map = texture_map(veh, keys, name, &r);
         let mut by_name: HashMap<String, i16> = HashMap::new();
-        shader_tex_index = vec![-1i16; names.len()];
-        for (si, n) in names.iter().enumerate() {
-            let Some(tname) = n else { continue };
-            let key = tname.to_lowercase();
-            let Some(tex) = map.get(&key) else { continue };
-            let idx = match by_name.get(&key) {
-                Some(&i) => i,
-                None => {
-                    let i = textures.len() as i16;
-                    // Full resolution (downscale is a no-op above this size).
-                    textures.push(textures::downscale(tex, 8192));
-                    by_name.insert(key, i);
-                    i
+        {
+            let mut resolve = |opt: &Option<String>| -> i16 {
+                let Some(tname) = opt else { return -1 };
+                let key = tname.to_lowercase();
+                let Some(tex) = map.get(&key) else { return -1 };
+                if let Some(&i) = by_name.get(&key) {
+                    return i;
                 }
+                let i = textures.len() as i16;
+                textures.push(textures::downscale(tex, 8192)); // no-op (full res)
+                by_name.insert(key, i);
+                i
             };
-            shader_tex_index[si] = idx;
+            for info in &infos {
+                let diffuse = resolve(&info.diffuse);
+                let normal = resolve(&info.normal);
+                let glass = info
+                    .diffuse
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains("glass"))
+                    .unwrap_or(false);
+                materials.push(wire::Material { diffuse, normal, glass });
+            }
         }
     }
 
-    Ok(wire::serialize(&grouped, &textures, &shader_tex_index))
+    Ok(wire::serialize(&grouped, &textures, &materials))
 }

@@ -8,7 +8,9 @@ local VehicleWire = {}
 
 export type Geometry = {
 	shaderIndex: number,
-	textureIndex: number, -- index into Vehicle.textures, -1 = none
+	diffuseIndex: number, -- index into Vehicle.textures, -1 = none
+	normalMapIndex: number, -- -1 = none
+	glass: boolean,
 	vertexCount: number,
 	indexCount: number,
 	hasNormals: boolean,
@@ -45,13 +47,15 @@ local MAGIC = "GVEH"
 
 local function readGeometry(r: BinaryReader.BinaryReader): Geometry
 	local shaderIndex = r:u16()
-	local textureIndex = r:i16()
+	local diffuseIndex = r:i16()
+	local normalMapIndex = r:i16()
 	local flags = r:u8()
 	r:u8()
 	local vcount = r:u32()
 	local icount = r:u32()
 	local hasN = bit32.band(flags, 1) == 1
 	local hasUV = bit32.band(flags, 2) == 2
+	local glass = bit32.band(flags, 4) == 4
 
 	local posOffset = r:tell()
 	r:skip(vcount * 12)
@@ -70,7 +74,9 @@ local function readGeometry(r: BinaryReader.BinaryReader): Geometry
 
 	return {
 		shaderIndex = shaderIndex,
-		textureIndex = textureIndex,
+		diffuseIndex = diffuseIndex,
+		normalMapIndex = normalMapIndex,
+		glass = glass,
 		vertexCount = vcount,
 		indexCount = icount,
 		hasNormals = hasN,
