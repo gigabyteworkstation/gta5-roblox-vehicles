@@ -21,16 +21,29 @@ pub struct Part {
     pub geometries: Vec<Geometry>,
 }
 
-/// Which bones articulate, and their conventional hinge axis (RAGE space).
-/// Doors swing about world-up (Z); hood/boot pivot about the lateral axis (X).
-fn articulated_hinge(name: &str) -> Option<[f32; 3]> {
-    if name.starts_with("door_") {
-        Some([0.0, 0.0, 1.0]) // vertical hinge
-    } else if name == "bonnet" || name == "hood" || name == "boot" {
-        Some([1.0, 0.0, 0.0]) // lateral hinge
+const PI: f32 = std::f32::consts::PI;
+
+/// Which bones articulate, and their GTA articulation (Automobile.cpp): the
+/// bone-LOCAL hinge axis, and the signed open angle (radians). Driver-side
+/// doors open negative, passenger-side positive (mirrored). The world hinge
+/// axis is this local axis rotated by the bone's world orientation.
+fn articulated_spec(name: &str) -> Option<([f32; 3], f32)> {
+    // AXIS_X = (1,0,0), AXIS_Z = (0,0,1) in the bone's local frame.
+    if name.starts_with("door_dside") {
+        Some(([0.0, 0.0, 1.0], -0.4 * PI))
+    } else if name.starts_with("door_pside") {
+        Some(([0.0, 0.0, 1.0], 0.4 * PI))
+    } else if name == "bonnet" || name == "hood" {
+        Some(([1.0, 0.0, 0.0], 0.3 * PI))
+    } else if name == "boot" || name == "boot_2" {
+        Some(([1.0, 0.0, 0.0], -0.3 * PI))
     } else {
         None
     }
+}
+
+fn is_articulated(name: &str) -> bool {
+    articulated_spec(name).is_some()
 }
 
 /// Dominant bone (skeleton index) for a triangle: the bone with the greatest
@@ -113,7 +126,7 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
             let (a, b, c) = (idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize);
             let dest = triangle_bone(g, a, b, c)
                 .map(bone_name)
-                .filter(|n| articulated_hinge(n).is_some())
+                .filter(|n| is_articulated(n))
                 .map(|n| n.to_string());
             match dest {
                 Some(name) => part_tris.entry(name).or_default().push((a, b, c)),
@@ -137,14 +150,16 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
     }];
 
     for (name, entries) in artic {
-        let axis = articulated_hinge(&name).unwrap_or([0.0, 0.0, 1.0]);
-        // Hinge position = the bone's world rest position.
-        let pos = bones
+        let (local_axis, open) = articulated_spec(&name).unwrap_or(([0.0, 0.0, 1.0], 0.4 * PI));
+        // Hinge position + world axis come from the bone's world rest transform:
+        // the local axis rotated into world space (so doors swing along the
+        // raked pillar, etc.).
+        let (pos, axis) = bones
             .iter()
             .position(|b| b.name == name)
             .and_then(|i| world.get(i))
-            .map(|(p, _)| *p)
-            .unwrap_or([0.0, 0.0, 0.0]);
+            .map(|(p, q)| (*p, crate::skeleton::quat_rotate(*q, local_axis)))
+            .unwrap_or(([0.0, 0.0, 0.0], local_axis));
         let geometries = entries
             .into_iter()
             .map(|(gi, tris)| extract(&mesh.geometries[gi], &tris))
@@ -152,7 +167,12 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
         parts.push(Part {
             name,
             articulated: true,
-            hinge: Some(Hinge { pos, axis, min_angle: 0.0, max_angle: 1.22 }), // ~70°
+            hinge: Some(Hinge {
+                pos,
+                axis,
+                min_angle: open.min(0.0),
+                max_angle: open.max(0.0),
+            }),
             geometries,
         });
     }

@@ -22,10 +22,12 @@ end
 local model = result :: Model
 print(`[GtaVehicle] built {VEHICLE}: {#model:GetChildren()} parts`)
 
--- Demo the hinges: open everything up.
+-- Demo the hinges: open everything to its GTA angle, then close, looping.
 task.wait(1.5)
-VehicleLoader.setHinge(model, "door_dside_f", 60)
-VehicleLoader.setHinge(model, "door_pside_f", 60)
-VehicleLoader.setHinge(model, "bonnet", 45)
-VehicleLoader.setHinge(model, "boot", 45)
-print("[GtaVehicle] opened doors / hood / boot (hinge test)")
+while model.Parent do
+	VehicleLoader.openAll(model)
+	print("[GtaVehicle] opened all (GTA angles)")
+	task.wait(3)
+	VehicleLoader.closeAll(model)
+	task.wait(3)
+end

@@ -138,9 +138,11 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 			local hingePos = rageVec(h.pos)
 			local hingeAxis = rageDir(h.axis)
 
-			local part = buildPartMesh(vehicle.buffer, p.geometries, hingePos)
+			-- Build like the body (world coords); CreateMeshPartAsync places the
+			-- part at the door's real location. The hinge is just an attachment
+			-- offset within the part — no CFrame override.
+			local part = buildPartMesh(vehicle.buffer, p.geometries, Vector3.zero)
 			if part then
-				part.CFrame = CFrame.new(hingePos)
 				part.Anchored = true -- released after positioning
 				part.CanCollide = false
 				part.Name = p.name
@@ -189,6 +191,24 @@ function VehicleLoader.setHinge(model: Model, partName: string, angleDeg: number
 	for _, d in model:GetDescendants() do
 		if d:IsA("HingeConstraint") and d.Name == partName then
 			d.TargetAngle = angleDeg
+		end
+	end
+end
+
+-- Open every articulated part to its GTA open angle (the non-zero limit).
+function VehicleLoader.openAll(model: Model)
+	for _, d in model:GetDescendants() do
+		if d:IsA("HingeConstraint") then
+			local open = if math.abs(d.UpperAngle) >= math.abs(d.LowerAngle) then d.UpperAngle else d.LowerAngle
+			d.TargetAngle = open
+		end
+	end
+end
+
+function VehicleLoader.closeAll(model: Model)
+	for _, d in model:GetDescendants() do
+		if d:IsA("HingeConstraint") then
+			d.TargetAngle = 0
 		end
 	end
 end
