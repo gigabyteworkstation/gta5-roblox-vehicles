@@ -9,7 +9,7 @@ local remote = ReplicatedStorage:WaitForChild("GetVehicleData") :: RemoteFunctio
 local VEHICLE = "zion_hi"
 
 local ok, result = pcall(function()
-	local data = remote:InvokeServer(VEHICLE, false)
+	local data = remote:InvokeServer(VEHICLE, true) -- true = include textures
 	return VehicleLoader.build(data, VEHICLE, workspace, CFrame.new(0, 8, 0))
 end)
 

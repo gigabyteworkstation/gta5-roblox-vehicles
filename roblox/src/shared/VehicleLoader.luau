@@ -1,13 +1,10 @@
 --!strict
--- Builds a vehicle as rigid parts (matching GTA's bone grouping): the "body"
--- as anchored MeshParts, and each articulated part (doors/hood/boot) as ONE
--- merged MeshPart attached to the body with a HingeConstraint (GTA hinge).
+-- Builds a vehicle as rigid parts (GTA bone grouping) with textures.
 --
--- Articulated parts: authored relative to their hinge (so physics rotates about
--- the hinge), built anchored, positioned with the car, then released so the
--- hinge takes over. One merged part per door avoids a pile of welded bodies.
---
--- RAGE (X right, Y fwd, Z up) → Roblox (X right, Y up, Z back): (x, z, -y) * scale.
+-- Body components are anchored MeshParts, split by texture (one MeshPart per
+-- texture so each can carry its own EditableImage). Articulated parts (doors/
+-- hood/boot) stay as a single merged MeshPart with their dominant texture and a
+-- Servo HingeConstraint (GTA axis + angle).
 
 local AssetService = game:GetService("AssetService")
 local HttpService = game:GetService("HttpService")
@@ -45,20 +42,63 @@ local function axisCFrame(pos: Vector3, axis: Vector3): CFrame
 	return CFrame.fromMatrix(pos, axis, y, z)
 end
 
--- Build ONE MeshPart from a list of geometries merged together, with vertices
--- offset by `origin`. Returns nil on budget/limit failure.
-local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, origin: Vector3): MeshPart?
+-- Bake each texture into static content once (keyed by 0-based wire index).
+local function buildTextureCache(vehicle: VehicleWire.Vehicle): { [number]: Content }
+	local cache: { [number]: Content } = {}
+	for i, t in vehicle.textures do
+		local img = AssetService:CreateEditableImage({ Size = Vector2.new(t.width, t.height) })
+		if img then
+			local size = t.width * t.height * 4
+			local buf = buffer.create(size)
+			buffer.copy(buf, 0, vehicle.buffer, t.rgbaOffset, size)
+			img:WritePixelsBuffer(Vector2.zero, Vector2.new(t.width, t.height), buf)
+			local res, content = AssetService:CreateDataModelContentAsync(Content.fromObject(img))
+			img:Destroy()
+			if res == Enum.CreateContentResult.Success then
+				cache[i - 1] = content -- wire textureIndex is 0-based
+			end
+		end
+	end
+	return cache
+end
+
+local function groupByTexture(geometries: { VehicleWire.Geometry }): { [number]: { VehicleWire.Geometry } }
+	local groups: { [number]: { VehicleWire.Geometry } } = {}
+	for _, g in geometries do
+		local ti = g.textureIndex
+		if not groups[ti] then
+			groups[ti] = {}
+		end
+		table.insert(groups[ti], g)
+	end
+	return groups
+end
+
+local function dominantTexture(geometries: { VehicleWire.Geometry }): number
+	local tris: { [number]: number } = {}
+	for _, g in geometries do
+		tris[g.textureIndex] = (tris[g.textureIndex] or 0) + g.indexCount
+	end
+	local best, bestN = -1, -1
+	for ti, n in tris do
+		if n > bestN then
+			best, bestN = ti, n
+		end
+	end
+	return best
+end
+
+-- Build ONE MeshPart from a list of geometries merged together.
+local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }): MeshPart?
 	local mesh: EditableMesh? = AssetService:CreateEditableMesh()
 	if not mesh then
 		return nil
 	end
-
 	for _, geom in geometries do
 		local vids = table.create(geom.vertexCount) :: { number }
 		for v = 0, geom.vertexCount - 1 do
-			vids[v] = mesh:AddVertex(ragePosWorld(buf, geom.posOffset + v * 12) - origin)
+			vids[v] = mesh:AddVertex(ragePosWorld(buf, geom.posOffset + v * 12))
 		end
-
 		local nids: { number }? = nil
 		if geom.hasNormals and geom.normalOffset then
 			local off = geom.normalOffset
@@ -71,7 +111,6 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, 
 			end
 			nids = arr
 		end
-
 		local uvids: { number }? = nil
 		if geom.hasUVs and geom.uvOffset then
 			local off = geom.uvOffset
@@ -81,7 +120,6 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, 
 			end
 			uvids = arr
 		end
-
 		local io = geom.indexOffset
 		local t = 0
 		while t + 2 < geom.indexCount do
@@ -107,20 +145,29 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, 
 	return AssetService:CreateMeshPartAsync(content, BAKE_OPTIONS)
 end
 
+local function applyTexture(part: MeshPart, cache: { [number]: Content }, ti: number)
+	if cache[ti] then
+		part.TextureContent = cache[ti]
+	end
+end
+
 function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model
 	local vehicle = VehicleWire.parse(data)
+	local cache = buildTextureCache(vehicle)
+
 	local model = Instance.new("Model")
 	model.Name = name
 
-	-- Body: anchored, one MeshPart per geometry (keeps each under mesh limits).
+	-- Body: anchored, split by texture.
 	local bodyBase: BasePart? = nil
 	for _, p in vehicle.parts do
 		if not p.articulated then
-			for i, geom in p.geometries do
-				local part = buildPartMesh(vehicle.buffer, { geom }, Vector3.zero)
+			for ti, geoms in groupByTexture(p.geometries) do
+				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
 					part.Anchored = true
-					part.Name = `body_{i}`
+					applyTexture(part, cache, ti)
+					part.Name = p.name
 					part.Parent = model
 					if not bodyBase then
 						bodyBase = part
@@ -130,25 +177,20 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
-	-- Articulated parts: ONE merged part each, built anchored for now.
-	local articulatedRoots: { BasePart } = {}
+	-- Articulated: one merged part (dominant texture) + Servo hinge.
+	local articulated: { BasePart } = {}
 	for _, p in vehicle.parts do
 		if p.articulated and p.hinge and bodyBase then
 			local h = p.hinge
-			local hingePos = rageVec(h.pos)
-			local hingeAxis = rageDir(h.axis)
-
-			-- Build like the body (world coords); CreateMeshPartAsync places the
-			-- part at the door's real location. The hinge is just an attachment
-			-- offset within the part — no CFrame override.
-			local part = buildPartMesh(vehicle.buffer, p.geometries, Vector3.zero)
+			local part = buildPartMesh(vehicle.buffer, p.geometries)
 			if part then
-				part.Anchored = true -- released after positioning
+				part.Anchored = true
 				part.CanCollide = false
+				applyTexture(part, cache, dominantTexture(p.geometries))
 				part.Name = p.name
 				part.Parent = model
 
-				local cf = axisCFrame(hingePos, hingeAxis)
+				local cf = axisCFrame(rageVec(h.pos), rageDir(h.axis))
 				local a0 = Instance.new("Attachment")
 				a0.WorldCFrame = cf
 				a0.Parent = bodyBase
@@ -169,7 +211,7 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 				hinge.TargetAngle = 0
 				hinge.Parent = part
 
-				table.insert(articulatedRoots, part)
+				table.insert(articulated, part)
 			end
 		end
 	end
@@ -178,15 +220,13 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	if pivot then
 		model:PivotTo(pivot)
 	end
-	-- Release the hinged parts now that everything is positioned.
-	for _, r in articulatedRoots do
+	for _, r in articulated do
 		r.Anchored = false
 	end
 
 	return model
 end
 
--- Open/close an articulated part by driving its hinge to an angle (degrees).
 function VehicleLoader.setHinge(model: Model, partName: string, angleDeg: number)
 	for _, d in model:GetDescendants() do
 		if d:IsA("HingeConstraint") and d.Name == partName then
@@ -195,12 +235,10 @@ function VehicleLoader.setHinge(model: Model, partName: string, angleDeg: number
 	end
 end
 
--- Open every articulated part to its GTA open angle (the non-zero limit).
 function VehicleLoader.openAll(model: Model)
 	for _, d in model:GetDescendants() do
 		if d:IsA("HingeConstraint") then
-			local open = if math.abs(d.UpperAngle) >= math.abs(d.LowerAngle) then d.UpperAngle else d.LowerAngle
-			d.TargetAngle = open
+			d.TargetAngle = if math.abs(d.UpperAngle) >= math.abs(d.LowerAngle) then d.UpperAngle else d.LowerAngle
 		end
 	end
 end
@@ -214,7 +252,7 @@ function VehicleLoader.closeAll(model: Model)
 end
 
 function VehicleLoader.load(name: string, baseUrl: string, parent: Instance?): Model
-	local data = HttpService:GetAsync(`{baseUrl}/rpf/readVehicle?v={name}`)
+	local data = HttpService:GetAsync(`{baseUrl}/rpf/readVehicle?v={name}&tex=1`)
 	return VehicleLoader.build(data, name, parent)
 end
 
