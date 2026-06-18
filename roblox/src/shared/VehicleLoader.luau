@@ -1,14 +1,13 @@
 --!strict
 -- Builds a vehicle as rigid parts (matching GTA's bone grouping): the "body"
--- as anchored MeshParts, and each articulated part (doors/hood/boot) as an
--- assembly attached to the body with a HingeConstraint using GTA's hinge.
+-- as anchored MeshParts, and each articulated part (doors/hood/boot) as ONE
+-- merged MeshPart attached to the body with a HingeConstraint (GTA hinge).
 --
--- Articulated parts are authored RELATIVE to their hinge (so the part's pivot
--- sits on the hinge and physics rotates about the right point), then placed at
--- the hinge in world space.
+-- Articulated parts: authored relative to their hinge (so physics rotates about
+-- the hinge), built anchored, positioned with the car, then released so the
+-- hinge takes over. One merged part per door avoids a pile of welded bodies.
 --
--- RAGE (X right, Y forward, Z up) → Roblox (X right, Y up, Z back): (x, z, -y),
--- scaled to studs. Directions (hinge axis) use the same swap without scale.
+-- RAGE (X right, Y fwd, Z up) → Roblox (X right, Y up, Z back): (x, z, -y) * scale.
 
 local AssetService = game:GetService("AssetService")
 local HttpService = game:GetService("HttpService")
@@ -18,7 +17,6 @@ local VehicleWire = require(script.Parent.VehicleWire)
 local VehicleLoader = {}
 
 local STUDS_PER_METER = 4
-
 local BAKE_OPTIONS = {
 	CollisionFidelity = Enum.CollisionFidelity.Box,
 	RenderFidelity = Enum.RenderFidelity.Precise,
@@ -31,16 +29,14 @@ local function ragePosWorld(buf: buffer, off: number): Vector3
 	return Vector3.new(x, z, -y) * STUDS_PER_METER
 end
 
-local function rageVec(v: Vector3): Vector3 -- a RAGE position → Roblox (scaled)
+local function rageVec(v: Vector3): Vector3
 	return Vector3.new(v.X, v.Z, -v.Y) * STUDS_PER_METER
 end
 
-local function rageDir(v: Vector3): Vector3 -- a RAGE direction → Roblox (unscaled)
+local function rageDir(v: Vector3): Vector3
 	return Vector3.new(v.X, v.Z, -v.Y)
 end
 
--- A CFrame at `pos` whose primary (X / RightVector) axis is `axis` — what a
--- HingeConstraint Attachment uses as its rotation axis.
 local function axisCFrame(pos: Vector3, axis: Vector3): CFrame
 	axis = axis.Unit
 	local ref = if math.abs(axis.Y) < 0.99 then Vector3.yAxis else Vector3.xAxis
@@ -49,56 +45,58 @@ local function axisCFrame(pos: Vector3, axis: Vector3): CFrame
 	return CFrame.fromMatrix(pos, axis, y, z)
 end
 
--- Build one MeshPart from a geometry, with vertices offset by `origin` (so the
--- part's local space is centred on its pivot). Returns nil on budget failure.
-local function buildMeshPart(buf: buffer, geom: VehicleWire.Geometry, origin: Vector3): MeshPart?
+-- Build ONE MeshPart from a list of geometries merged together, with vertices
+-- offset by `origin`. Returns nil on budget/limit failure.
+local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, origin: Vector3): MeshPart?
 	local mesh: EditableMesh? = AssetService:CreateEditableMesh()
 	if not mesh then
 		return nil
 	end
 
-	local vids = table.create(geom.vertexCount) :: { number }
-	for v = 0, geom.vertexCount - 1 do
-		vids[v] = mesh:AddVertex(ragePosWorld(buf, geom.posOffset + v * 12) - origin)
-	end
-
-	local nids: { number }? = nil
-	if geom.hasNormals and geom.normalOffset then
-		local off = geom.normalOffset
-		local arr = table.create(geom.vertexCount) :: { number }
+	for _, geom in geometries do
+		local vids = table.create(geom.vertexCount) :: { number }
 		for v = 0, geom.vertexCount - 1 do
-			local x = buffer.readf32(buf, off + v * 12)
-			local y = buffer.readf32(buf, off + v * 12 + 4)
-			local z = buffer.readf32(buf, off + v * 12 + 8)
-			arr[v] = mesh:AddNormal(Vector3.new(x, z, -y))
+			vids[v] = mesh:AddVertex(ragePosWorld(buf, geom.posOffset + v * 12) - origin)
 		end
-		nids = arr
-	end
 
-	local uvids: { number }? = nil
-	if geom.hasUVs and geom.uvOffset then
-		local off = geom.uvOffset
-		local arr = table.create(geom.vertexCount) :: { number }
-		for v = 0, geom.vertexCount - 1 do
-			arr[v] = mesh:AddUV(Vector2.new(buffer.readf32(buf, off + v * 8), buffer.readf32(buf, off + v * 8 + 4)))
+		local nids: { number }? = nil
+		if geom.hasNormals and geom.normalOffset then
+			local off = geom.normalOffset
+			local arr = table.create(geom.vertexCount) :: { number }
+			for v = 0, geom.vertexCount - 1 do
+				local x = buffer.readf32(buf, off + v * 12)
+				local y = buffer.readf32(buf, off + v * 12 + 4)
+				local z = buffer.readf32(buf, off + v * 12 + 8)
+				arr[v] = mesh:AddNormal(Vector3.new(x, z, -y))
+			end
+			nids = arr
 		end
-		uvids = arr
-	end
 
-	local io = geom.indexOffset
-	local t = 0
-	while t + 2 < geom.indexCount do
-		local a = buffer.readu16(buf, io + t * 2)
-		local b = buffer.readu16(buf, io + (t + 1) * 2)
-		local c = buffer.readu16(buf, io + (t + 2) * 2)
-		local fid = mesh:AddTriangle(vids[a], vids[b], vids[c])
-		if nids then
-			mesh:SetFaceNormals(fid, { nids[a], nids[b], nids[c] })
+		local uvids: { number }? = nil
+		if geom.hasUVs and geom.uvOffset then
+			local off = geom.uvOffset
+			local arr = table.create(geom.vertexCount) :: { number }
+			for v = 0, geom.vertexCount - 1 do
+				arr[v] = mesh:AddUV(Vector2.new(buffer.readf32(buf, off + v * 8), buffer.readf32(buf, off + v * 8 + 4)))
+			end
+			uvids = arr
 		end
-		if uvids then
-			mesh:SetFaceUVs(fid, { uvids[a], uvids[b], uvids[c] })
+
+		local io = geom.indexOffset
+		local t = 0
+		while t + 2 < geom.indexCount do
+			local a = buffer.readu16(buf, io + t * 2)
+			local b = buffer.readu16(buf, io + (t + 1) * 2)
+			local c = buffer.readu16(buf, io + (t + 2) * 2)
+			local fid = mesh:AddTriangle(vids[a], vids[b], vids[c])
+			if nids then
+				mesh:SetFaceNormals(fid, { nids[a], nids[b], nids[c] })
+			end
+			if uvids then
+				mesh:SetFaceUVs(fid, { uvids[a], uvids[b], uvids[c] })
+			end
+			t += 3
 		end
-		t += 3
 	end
 
 	local res, content = AssetService:CreateDataModelContentAsync(Content.fromObject(mesh))
@@ -109,17 +107,17 @@ local function buildMeshPart(buf: buffer, geom: VehicleWire.Geometry, origin: Ve
 	return AssetService:CreateMeshPartAsync(content, BAKE_OPTIONS)
 end
 
-function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?): Model
+function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model
 	local vehicle = VehicleWire.parse(data)
 	local model = Instance.new("Model")
 	model.Name = name
 
-	-- Body first (anchored). Keep one part as the hinge base.
+	-- Body: anchored, one MeshPart per geometry (keeps each under mesh limits).
 	local bodyBase: BasePart? = nil
 	for _, p in vehicle.parts do
 		if not p.articulated then
 			for i, geom in p.geometries do
-				local part = buildMeshPart(vehicle.buffer, geom, Vector3.zero)
+				local part = buildPartMesh(vehicle.buffer, { geom }, Vector3.zero)
 				if part then
 					part.Anchored = true
 					part.Name = `body_{i}`
@@ -132,42 +130,29 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
-	-- Articulated parts: hinged assemblies attached to the body.
+	-- Articulated parts: ONE merged part each, built anchored for now.
+	local articulatedRoots: { BasePart } = {}
 	for _, p in vehicle.parts do
 		if p.articulated and p.hinge and bodyBase then
 			local h = p.hinge
 			local hingePos = rageVec(h.pos)
 			local hingeAxis = rageDir(h.axis)
-			local root: BasePart? = nil
 
-			for i, geom in p.geometries do
-				local part = buildMeshPart(vehicle.buffer, geom, hingePos)
-				if part then
-					part.CFrame = CFrame.new(hingePos)
-					part.Anchored = false
-					part.CanCollide = false
-					part.Massless = true
-					part.Name = `{p.name}_{i}`
-					part.Parent = model
-					if not root then
-						root = part
-					else
-						local weld = Instance.new("WeldConstraint")
-						weld.Part0 = root
-						weld.Part1 = part
-						weld.Parent = root
-					end
-				end
-			end
+			local part = buildPartMesh(vehicle.buffer, p.geometries, hingePos)
+			if part then
+				part.CFrame = CFrame.new(hingePos)
+				part.Anchored = true -- released after positioning
+				part.CanCollide = false
+				part.Name = p.name
+				part.Parent = model
 
-			if root then
 				local cf = axisCFrame(hingePos, hingeAxis)
 				local a0 = Instance.new("Attachment")
 				a0.WorldCFrame = cf
 				a0.Parent = bodyBase
 				local a1 = Instance.new("Attachment")
 				a1.WorldCFrame = cf
-				a1.Parent = root
+				a1.Parent = part
 
 				local hinge = Instance.new("HingeConstraint")
 				hinge.Name = p.name
@@ -177,15 +162,25 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 				hinge.LowerAngle = math.min(0, math.deg(h.minAngle))
 				hinge.UpperAngle = math.max(5, math.deg(h.maxAngle))
 				hinge.ActuatorType = Enum.ActuatorType.Servo
-				hinge.ServoMaxTorque = math.huge
-				hinge.AngularSpeed = 3
+				hinge.ServoMaxTorque = 100000
+				hinge.AngularSpeed = 2
 				hinge.TargetAngle = 0
-				hinge.Parent = root
+				hinge.Parent = part
+
+				table.insert(articulatedRoots, part)
 			end
 		end
 	end
 
 	model.Parent = parent or workspace
+	if pivot then
+		model:PivotTo(pivot)
+	end
+	-- Release the hinged parts now that everything is positioned.
+	for _, r in articulatedRoots do
+		r.Anchored = false
+	end
+
 	return model
 end
 

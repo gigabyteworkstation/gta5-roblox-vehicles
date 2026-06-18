@@ -10,7 +10,7 @@ local VEHICLE = "zion_hi"
 
 local ok, result = pcall(function()
 	local data = remote:InvokeServer(VEHICLE, false)
-	return VehicleLoader.build(data, VEHICLE, workspace)
+	return VehicleLoader.build(data, VEHICLE, workspace, CFrame.new(0, 8, 0))
 end)
 
 if not ok then
@@ -20,7 +20,6 @@ if not ok then
 end
 
 local model = result :: Model
-model:PivotTo(CFrame.new(0, 8, 0))
 print(`[GtaVehicle] built {VEHICLE}: {#model:GetChildren()} parts`)
 
 -- Demo the hinges: open everything up.
