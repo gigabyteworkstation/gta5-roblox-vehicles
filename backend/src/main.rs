@@ -353,7 +353,12 @@ fn run() -> Result<()> {
             let r = Rsc7::parse(&rsc)?;
             let mesh = yft::decode(&r)?;
             let infos = shaders::shader_infos(&r)?;
-            let tex_map = pipeline::texture_map(&veh, &keys, name, &r);
+            let needed: Vec<String> = infos
+                .iter()
+                .flat_map(|i| [i.diffuse.clone(), i.normal.clone()])
+                .flatten()
+                .collect();
+            let tex_map = pipeline::texture_map(&veh, &keys, name, &r, &needed);
             println!("\n{yft}: {} shaders, {} textures available", infos.len(), tex_map.len());
 
             let mut seen = std::collections::BTreeSet::new();

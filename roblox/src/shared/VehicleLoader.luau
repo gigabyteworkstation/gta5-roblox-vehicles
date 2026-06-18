@@ -136,17 +136,23 @@ end
 -- and per-pixel transparency for glass (uses the diffuse alpha channel).
 local function applyMaterial(part: MeshPart, cache: { [number]: Content }, geom: VehicleWire.Geometry)
 	local diffuse = cache[geom.diffuseIndex]
-	if not diffuse then
-		return
+	if diffuse then
+		local saData: { [string]: any } = { ColorMap = diffuse }
+		local normal = cache[geom.normalMapIndex]
+		if normal then
+			saData.NormalMap = normal
+		end
+		local sa = AssetService:CreateSurfaceAppearanceAsync(saData)
+		sa.AlphaMode = if geom.glass then Enum.AlphaMode.Transparency else Enum.AlphaMode.Overlay
+		sa.Parent = part
+	else
+		-- No diffuse = paint surface (runtime colour). Give it a glossy look.
+		part.Material = Enum.Material.SmoothPlastic
+		part.Reflectance = 0.08
 	end
-	local saData: { [string]: any } = { ColorMap = diffuse }
-	local normal = cache[geom.normalMapIndex]
-	if normal then
-		saData.NormalMap = normal
+	if geom.glass then
+		part.Transparency = 0.02
 	end
-	local sa = AssetService:CreateSurfaceAppearanceAsync(saData)
-	sa.AlphaMode = if geom.glass then Enum.AlphaMode.Transparency else Enum.AlphaMode.Overlay
-	sa.Parent = part
 end
 
 function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model

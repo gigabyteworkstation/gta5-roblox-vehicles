@@ -16,13 +16,16 @@ fn decode_ytd(veh: &Archive, keys: &GtaKeys, name: &str) -> Vec<DecodedTexture> 
 }
 
 /// Build a name → texture map from every source a vehicle draws from: the txd
-/// embedded in the .yft, the vehicle's own .ytd (+HD), and shared vehshare.ytd.
-/// Names are lowercased; earlier sources win (embedded/vehicle over shared).
+/// embedded in the .yft, shared vehshare.ytd, and — derived from the texture
+/// names the shaders need — each name prefix's `<prefix>.ytd` / `+hi` /
+/// `vehicles_<prefix>_interior.ytd`. So `sultan_dash_hd` pulls in `sultan.ytd`
+/// etc. Names lowercased; earlier sources win.
 pub fn texture_map(
     veh: &Archive,
     keys: &GtaKeys,
     name: &str,
     yft_rsc: &Rsc7,
+    needed: &[String],
 ) -> HashMap<String, DecodedTexture> {
     let mut map = HashMap::new();
     let mut add = |texs: Vec<DecodedTexture>| {
@@ -39,6 +42,20 @@ pub fn texture_map(
     let base = name.trim_end_matches("_hi");
     add(decode_ytd(veh, keys, &format!("{base}.ytd")));
     add(decode_ytd(veh, keys, &format!("{base}+hi.ytd")));
+
+    // Texture-name prefixes → their dictionaries (interior, shared model, etc.).
+    let mut prefixes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for n in needed {
+        if let Some(p) = n.to_lowercase().split('_').next() {
+            prefixes.insert(p.to_string());
+        }
+    }
+    for p in prefixes {
+        add(decode_ytd(veh, keys, &format!("{p}.ytd")));
+        add(decode_ytd(veh, keys, &format!("{p}+hi.ytd")));
+        add(decode_ytd(veh, keys, &format!("vehicles_{p}_interior.ytd")));
+    }
+
     add(decode_ytd(veh, keys, "vehshare.ytd"));
     add(decode_ytd(veh, keys, "vehshare_worn.ytd"));
 
@@ -69,7 +86,12 @@ pub fn build_vehicle(
     let mut materials: Vec<wire::Material> = Vec::new();
     if include_textures {
         let infos = shaders::shader_infos(&r).unwrap_or_default();
-        let map = texture_map(veh, keys, name, &r);
+        let needed: Vec<String> = infos
+            .iter()
+            .flat_map(|i| [i.diffuse.clone(), i.normal.clone()])
+            .flatten()
+            .collect();
+        let map = texture_map(veh, keys, name, &r, &needed);
         let mut by_name: HashMap<String, i16> = HashMap::new();
         {
             let mut resolve = |opt: &Option<String>| -> i16 {
