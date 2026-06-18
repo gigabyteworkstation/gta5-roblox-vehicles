@@ -2,6 +2,7 @@
 //! List vehicle assets and extract one vehicle's raw resource bytes.
 
 mod archive;
+mod parts;
 mod pipeline;
 mod rsc7;
 mod server;
@@ -80,6 +81,11 @@ enum Commands {
 
     /// Parse and print a vehicle's skeleton (bones) for verification
     Skeleton {
+        name: String,
+    },
+
+    /// Group a vehicle's mesh into rigid parts by bone (articulation preview)
+    Parts {
         name: String,
     },
 
@@ -308,6 +314,30 @@ fn run() -> Result<()> {
             let bones = skeleton::parse(&r)?;
             println!("\n{yft}:");
             skeleton::print_tree(&bones);
+        }
+
+        Commands::Parts { name } => {
+            let yft = format!("{name}.yft");
+            let file = veh.find_file(&yft).with_context(|| format!("{yft} not found"))?;
+            let rsc = veh.extract(file, Some(&keys))?;
+            let r = Rsc7::parse(&rsc)?;
+            let mesh = yft::decode(&r)?;
+            let bones = skeleton::parse(&r)?;
+            let world = skeleton::world_transforms(&bones);
+            let grouped = parts::group(&mesh, &bones, &world);
+            println!("\n{yft}: {} parts", grouped.len());
+            for p in &grouped {
+                let verts: usize = p.geometries.iter().map(|g| g.positions.len()).sum();
+                let tris: usize = p.geometries.iter().map(|g| g.indices.len() / 3).sum();
+                if let Some(h) = &p.hinge {
+                    println!(
+                        "  {:<16} {:>6} verts {:>6} tris  HINGE pos=({:.2},{:.2},{:.2}) axis=({:.0},{:.0},{:.0})",
+                        p.name, verts, tris, h.pos[0], h.pos[1], h.pos[2], h.axis[0], h.axis[1], h.axis[2]
+                    );
+                } else {
+                    println!("  {:<16} {:>6} verts {:>6} tris  (body)", p.name, verts, tris);
+                }
+            }
         }
 
         Commands::Serve { addr } => {
