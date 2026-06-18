@@ -4,38 +4,42 @@
 //! the LuaU side can feed them straight into EditableMesh without re-parsing a
 //! packed vertex stride.
 //!
+//! Parts-based format (v3). The vehicle is a list of rigid parts: a "body" plus
+//! articulated parts (doors/hood/boot) each carrying a hinge. All little-endian;
+//! geometry attributes de-interleaved. RAGE space — client applies the axis swap.
+//!
 //! Header:
 //!   u32  magic 'GVEH'
-//!   u8   version (=2)
+//!   u8   version (=3)
 //!   u8   reserved
 //!   u16  reserved
-//!   u32  geometryCount
+//!   u32  partCount
 //!   u32  textureCount
-//!   u32  boneCount
-//! Geometry[]:
-//!   u16  shaderIndex
-//!   u8   attrFlags (bit0 normals, bit1 uvs, bit2 skinned)
+//! Part[]:
+//!   u16  nameLen, name bytes (utf8)
+//!   u8   articulated (0/1)
 //!   u8   reserved
-//!   u32  vertexCount   (always < 65536 per geometry)
-//!   u32  indexCount
-//!   f32  positions[vertexCount*3]
-//!   f32  normals[vertexCount*3]      (if bit0)
-//!   f32  uvs[vertexCount*2]          (if bit1)
-//!   u16  indices[indexCount]
-//!   if bit2 (skinned), per vertex:   u16 boneIdx[4], u8 weight[4]
+//!   if articulated:
+//!     f32 hingePos[3], f32 hingeAxis[3], f32 minAngle, f32 maxAngle  (RAGE space, radians)
+//!   u32  geometryCount
+//!   Geometry[]:
+//!     u16  shaderIndex
+//!     u8   attrFlags (bit0 normals, bit1 uvs)
+//!     u8   reserved
+//!     u32  vertexCount   (< 65536)
+//!     u32  indexCount
+//!     f32  positions[vertexCount*3]
+//!     f32  normals[vertexCount*3]   (if bit0)
+//!     f32  uvs[vertexCount*2]       (if bit1)
+//!     u16  indices[indexCount]
 //! Texture[]:
 //!   u16  nameLen, name bytes (utf8)
 //!   u16  width, u16 height
 //!   u8   rgba[width*height*4]
-//! Bone[]:
-//!   u16  nameLen, name bytes (utf8)
-//!   i16  parentIndex (-1 = root)
-//!   f32  worldPos[3]    (RAGE space; client applies the same axis-swap as verts)
-//!   f32  worldQuat[4]   (x,y,z,w world rest rotation, RAGE space)
 
-use crate::skeleton::Bone;
+use crate::parts::Part;
 use crate::textures::DecodedTexture;
-use crate::yft::Mesh;
+use crate::yft::Geometry;
 
 const MAGIC: u32 = u32::from_le_bytes(*b"GVEH");
 
@@ -60,64 +64,68 @@ impl W {
     }
 }
 
-pub fn serialize(
-    mesh: &Mesh,
-    texs: &[DecodedTexture],
-    bones: &[Bone],
-    bone_world: &[([f32; 3], [f32; 4])],
-) -> Vec<u8> {
+fn write_geometry(w: &mut W, g: &Geometry) {
+    let has_n = !g.normals.is_empty();
+    let has_uv = !g.uvs.is_empty();
+    let flags = (has_n as u8) | ((has_uv as u8) << 1);
+
+    w.u16(g.shader_index);
+    w.u8(flags);
+    w.u8(0);
+    w.u32(g.positions.len() as u32);
+    w.u32(g.indices.len() as u32);
+
+    for p in &g.positions {
+        w.f32(p[0]);
+        w.f32(p[1]);
+        w.f32(p[2]);
+    }
+    if has_n {
+        for n in &g.normals {
+            w.f32(n[0]);
+            w.f32(n[1]);
+            w.f32(n[2]);
+        }
+    }
+    if has_uv {
+        for uv in &g.uvs {
+            w.f32(uv[0]);
+            w.f32(uv[1]);
+        }
+    }
+    for &i in &g.indices {
+        w.u16(i as u16);
+    }
+}
+
+pub fn serialize(parts: &[Part], texs: &[DecodedTexture]) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
-    w.u8(2);
+    w.u8(3);
     w.u8(0);
     w.u16(0);
-    w.u32(mesh.geometries.len() as u32);
+    w.u32(parts.len() as u32);
     w.u32(texs.len() as u32);
-    w.u32(bones.len() as u32);
 
-    for g in &mesh.geometries {
-        let has_n = !g.normals.is_empty();
-        let has_uv = !g.uvs.is_empty();
-        // Only mark skinned if we actually have a per-vertex entry for each vertex.
-        let has_skin = g.skinned && g.bone_idx.len() == g.positions.len();
-        let flags = (has_n as u8) | ((has_uv as u8) << 1) | ((has_skin as u8) << 2);
-
-        w.u16(g.shader_index);
-        w.u8(flags);
+    for p in parts {
+        let name = p.name.as_bytes();
+        w.u16(name.len() as u16);
+        w.raw(name);
+        w.u8(p.articulated as u8);
         w.u8(0);
-        w.u32(g.positions.len() as u32);
-        w.u32(g.indices.len() as u32);
-
-        for p in &g.positions {
-            w.f32(p[0]);
-            w.f32(p[1]);
-            w.f32(p[2]);
+        if let Some(h) = &p.hinge {
+            w.f32(h.pos[0]);
+            w.f32(h.pos[1]);
+            w.f32(h.pos[2]);
+            w.f32(h.axis[0]);
+            w.f32(h.axis[1]);
+            w.f32(h.axis[2]);
+            w.f32(h.min_angle);
+            w.f32(h.max_angle);
         }
-        if has_n {
-            for n in &g.normals {
-                w.f32(n[0]);
-                w.f32(n[1]);
-                w.f32(n[2]);
-            }
-        }
-        if has_uv {
-            for uv in &g.uvs {
-                w.f32(uv[0]);
-                w.f32(uv[1]);
-            }
-        }
-        // Indices fit in u16: each geometry has < 65536 vertices.
-        for &i in &g.indices {
-            w.u16(i as u16);
-        }
-        if has_skin {
-            for (idx, wt) in g.bone_idx.iter().zip(g.bone_wt.iter()) {
-                w.u16(idx[0]);
-                w.u16(idx[1]);
-                w.u16(idx[2]);
-                w.u16(idx[3]);
-                w.raw(wt);
-            }
+        w.u32(p.geometries.len() as u32);
+        for g in &p.geometries {
+            write_geometry(&mut w, g);
         }
     }
 
@@ -128,20 +136,6 @@ pub fn serialize(
         w.u16(t.width as u16);
         w.u16(t.height as u16);
         w.raw(&t.rgba);
-    }
-
-    for (b, (pos, quat)) in bones.iter().zip(bone_world.iter()) {
-        let name = b.name.as_bytes();
-        w.u16(name.len() as u16);
-        w.raw(name);
-        w.u16(b.parent as u16); // i16 bit pattern
-        w.f32(pos[0]);
-        w.f32(pos[1]);
-        w.f32(pos[2]);
-        w.f32(quat[0]);
-        w.f32(quat[1]);
-        w.f32(quat[2]);
-        w.f32(quat[3]);
     }
 
     w.b

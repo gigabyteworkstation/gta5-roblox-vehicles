@@ -1,7 +1,6 @@
 --!strict
--- Parses the "GVEH" v2 wire format into geometry/texture/bone records.
--- Keeps the raw buffer and stores per-geometry byte offsets so the loader can
--- read straight into EditableMesh.
+-- Parses the "GVEH" v3 (parts) wire format. The vehicle is a list of rigid
+-- parts: a "body" plus articulated parts (doors/hood/boot) each with a hinge.
 
 local BinaryReader = require(script.Parent.BinaryReader)
 
@@ -13,92 +12,111 @@ export type Geometry = {
 	indexCount: number,
 	hasNormals: boolean,
 	hasUVs: boolean,
-	skinned: boolean,
 	posOffset: number,
 	normalOffset: number?,
 	uvOffset: number?,
 	indexOffset: number,
-	skinOffset: number?, -- per vertex: u16 boneIdx[4], u8 weight[4]
 }
 
-export type Texture = {
-	name: string,
-	width: number,
-	height: number,
-	rgbaOffset: number,
+export type Hinge = {
+	pos: Vector3, -- RAGE space
+	axis: Vector3, -- RAGE space
+	minAngle: number, -- radians
+	maxAngle: number,
 }
 
-export type Bone = {
+export type Part = {
 	name: string,
-	parent: number, -- index into bones (1-based here); -1 = root
-	cframe: CFrame, -- RAGE-space world rest CFrame (position + rotation)
+	articulated: boolean,
+	hinge: Hinge?,
+	geometries: { Geometry },
 }
+
+export type Texture = { name: string, width: number, height: number, rgbaOffset: number }
 
 export type Vehicle = {
 	buffer: buffer,
-	geometries: { Geometry },
+	parts: { Part },
 	textures: { Texture },
-	bones: { Bone },
 }
 
 local MAGIC = "GVEH"
+
+local function readGeometry(r: BinaryReader.BinaryReader): Geometry
+	local shaderIndex = r:u16()
+	local flags = r:u8()
+	r:u8()
+	local vcount = r:u32()
+	local icount = r:u32()
+	local hasN = bit32.band(flags, 1) == 1
+	local hasUV = bit32.band(flags, 2) == 2
+
+	local posOffset = r:tell()
+	r:skip(vcount * 12)
+	local normalOffset: number? = nil
+	if hasN then
+		normalOffset = r:tell()
+		r:skip(vcount * 12)
+	end
+	local uvOffset: number? = nil
+	if hasUV then
+		uvOffset = r:tell()
+		r:skip(vcount * 8)
+	end
+	local indexOffset = r:tell()
+	r:skip(icount * 2)
+
+	return {
+		shaderIndex = shaderIndex,
+		vertexCount = vcount,
+		indexCount = icount,
+		hasNormals = hasN,
+		hasUVs = hasUV,
+		posOffset = posOffset,
+		normalOffset = normalOffset,
+		uvOffset = uvOffset,
+		indexOffset = indexOffset,
+	}
+end
 
 function VehicleWire.parse(data: buffer | string): Vehicle
 	local buf = if type(data) == "string" then buffer.fromstring(data) else data
 	local r = BinaryReader.new(buf)
 
-	local magic = r:fixedString(4)
-	assert(magic == MAGIC, `bad magic '{magic}' (expected GVEH)`)
+	assert(r:fixedString(4) == MAGIC, "bad magic (expected GVEH)")
 	local _version = r:u8()
-	r:skip(3) -- reserved
-	local geomCount = r:u32()
+	r:skip(3)
+	local partCount = r:u32()
 	local texCount = r:u32()
-	local boneCount = r:u32()
 
-	local geometries: { Geometry } = table.create(geomCount) :: { Geometry }
-	for i = 1, geomCount do
-		local shaderIndex = r:u16()
-		local flags = r:u8()
-		r:u8() -- reserved
-		local vcount = r:u32()
-		local icount = r:u32()
-		local hasN = bit32.band(flags, 1) == 1
-		local hasUV = bit32.band(flags, 2) == 2
-		local skinned = bit32.band(flags, 4) == 4
+	local parts: { Part } = table.create(partCount) :: { Part }
+	for i = 1, partCount do
+		local nameLen = r:u16()
+		local name = r:fixedString(nameLen)
+		local articulated = r:u8() == 1
+		r:u8()
 
-		local posOffset = r:tell()
-		r:skip(vcount * 12)
-		local normalOffset: number? = nil
-		if hasN then
-			normalOffset = r:tell()
-			r:skip(vcount * 12)
-		end
-		local uvOffset: number? = nil
-		if hasUV then
-			uvOffset = r:tell()
-			r:skip(vcount * 8)
-		end
-		local indexOffset = r:tell()
-		r:skip(icount * 2)
-		local skinOffset: number? = nil
-		if skinned then
-			skinOffset = r:tell()
-			r:skip(vcount * 12) -- 4*u16 + 4*u8
+		local hinge: Hinge? = nil
+		if articulated then
+			local px, py, pz = r:f32(), r:f32(), r:f32()
+			local ax, ay, az = r:f32(), r:f32(), r:f32()
+			local minA = r:f32()
+			local maxA = r:f32()
+			hinge = {
+				pos = Vector3.new(px, py, pz),
+				axis = Vector3.new(ax, ay, az),
+				minAngle = minA,
+				maxAngle = maxA,
+			}
 		end
 
-		geometries[i] = {
-			shaderIndex = shaderIndex,
-			vertexCount = vcount,
-			indexCount = icount,
-			hasNormals = hasN,
-			hasUVs = hasUV,
-			skinned = skinned,
-			posOffset = posOffset,
-			normalOffset = normalOffset,
-			uvOffset = uvOffset,
-			indexOffset = indexOffset,
-			skinOffset = skinOffset,
-		}
+		local geomCount = r:u32()
+		local geometries: { Geometry } = table.create(geomCount) :: { Geometry }
+		for j = 1, geomCount do
+			geometries[j] = readGeometry(r)
+		end
+
+		parts[i] = { name = name, articulated = articulated, hinge = hinge, geometries = geometries }
 	end
 
 	local textures: { Texture } = table.create(texCount) :: { Texture }
@@ -112,17 +130,7 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 		textures[i] = { name = name, width = width, height = height, rgbaOffset = rgbaOffset }
 	end
 
-	local bones: { Bone } = table.create(boneCount) :: { Bone }
-	for i = 1, boneCount do
-		local nameLen = r:u16()
-		local name = r:fixedString(nameLen)
-		local parent = r:i16()
-		local px, py, pz = r:f32(), r:f32(), r:f32()
-		local qx, qy, qz, qw = r:f32(), r:f32(), r:f32(), r:f32()
-		bones[i] = { name = name, parent = parent, cframe = CFrame.new(px, py, pz, qx, qy, qz, qw) }
-	end
-
-	return { buffer = buf, geometries = geometries, textures = textures, bones = bones }
+	return { buffer = buf, parts = parts, textures = textures }
 end
 
 return VehicleWire
