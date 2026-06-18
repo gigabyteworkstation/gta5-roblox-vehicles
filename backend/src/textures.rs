@@ -121,6 +121,51 @@ pub fn decode_dictionary_at(rsc: &Rsc7, dict_base: u64) -> Result<Vec<DecodedTex
     Ok(out)
 }
 
+/// Box-downscale a texture so its largest side is <= `max` (keeps the wire
+/// payload sane — raw RGBA of 1024² textures is far too big for HttpService).
+pub fn downscale(t: &DecodedTexture, max: u32) -> DecodedTexture {
+    let (w, h) = (t.width, t.height);
+    if w <= max && h <= max {
+        return DecodedTexture {
+            name: t.name.clone(),
+            width: w,
+            height: h,
+            format: t.format,
+            rgba: t.rgba.clone(),
+        };
+    }
+    let scale = (w.max(h)).div_ceil(max);
+    let nw = (w / scale).max(1);
+    let nh = (h / scale).max(1);
+    let mut out = vec![0u8; (nw * nh * 4) as usize];
+    for y in 0..nh {
+        for x in 0..nw {
+            let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let sx = x * scale + dx;
+                    let sy = y * scale + dy;
+                    if sx < w && sy < h {
+                        let o = ((sy * w + sx) * 4) as usize;
+                        r += t.rgba[o] as u32;
+                        g += t.rgba[o + 1] as u32;
+                        b += t.rgba[o + 2] as u32;
+                        a += t.rgba[o + 3] as u32;
+                        n += 1;
+                    }
+                }
+            }
+            let n = n.max(1);
+            let o = ((y * nw + x) * 4) as usize;
+            out[o] = (r / n) as u8;
+            out[o + 1] = (g / n) as u8;
+            out[o + 2] = (b / n) as u8;
+            out[o + 3] = (a / n) as u8;
+        }
+    }
+    DecodedTexture { name: t.name.clone(), width: nw, height: nh, format: t.format, rgba: out }
+}
+
 pub fn write_png(tex: &DecodedTexture, path: &std::path::Path) -> Result<()> {
     let img = image::RgbaImage::from_raw(tex.width, tex.height, tex.rgba.clone())
         .ok_or_else(|| anyhow::anyhow!("rgba buffer size mismatch"))?;

@@ -63,24 +63,31 @@ pub fn build_vehicle(
     let world = skeleton::world_transforms(&bones);
     let grouped = parts::group(&mesh, &bones, &world);
 
-    // Textures: base dict + HD dict (named off the base vehicle, not the _hi frag).
-    // Off by default — they're large (uncompressed RGBA) and not bound to
-    // geometries yet (needs shader→texture mapping).
-    let mut texs = Vec::new();
+    // Resolve each shader's diffuse texture → a deduped, downscaled texture list,
+    // and a per-shader index into it. Off by default (RGBA is large).
+    let mut textures: Vec<DecodedTexture> = Vec::new();
+    let mut shader_tex_index: Vec<i16> = Vec::new();
     if include_textures {
-        let base = name.trim_end_matches("_hi");
-        for tn in [format!("{base}.ytd"), format!("{base}+hi.ytd")] {
-            if let Some(tf) = veh.find_file(&tn) {
-                if let Ok(tb) = veh.extract(tf, Some(keys)) {
-                    if let Ok(tr) = Rsc7::parse(&tb) {
-                        if let Ok(mut t) = textures::decode_dictionary(&tr) {
-                            texs.append(&mut t);
-                        }
-                    }
+        let names = shaders::diffuse_names(&r).unwrap_or_default();
+        let map = texture_map(veh, keys, name, &r);
+        let mut by_name: HashMap<String, i16> = HashMap::new();
+        shader_tex_index = vec![-1i16; names.len()];
+        for (si, n) in names.iter().enumerate() {
+            let Some(tname) = n else { continue };
+            let key = tname.to_lowercase();
+            let Some(tex) = map.get(&key) else { continue };
+            let idx = match by_name.get(&key) {
+                Some(&i) => i,
+                None => {
+                    let i = textures.len() as i16;
+                    textures.push(textures::downscale(tex, 128));
+                    by_name.insert(key, i);
+                    i
                 }
-            }
+            };
+            shader_tex_index[si] = idx;
         }
     }
 
-    Ok(wire::serialize(&grouped, &texs))
+    Ok(wire::serialize(&grouped, &textures, &shader_tex_index))
 }

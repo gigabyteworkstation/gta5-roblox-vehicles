@@ -24,6 +24,7 @@
 //!   u32  geometryCount
 //!   Geometry[]:
 //!     u16  shaderIndex
+//!     i16  textureIndex (index into Texture[], -1 = none)
 //!     u8   attrFlags (bit0 normals, bit1 uvs)
 //!     u8   reserved
 //!     u32  vertexCount   (< 65536)
@@ -64,12 +65,13 @@ impl W {
     }
 }
 
-fn write_geometry(w: &mut W, g: &Geometry) {
+fn write_geometry(w: &mut W, g: &Geometry, tex_index: i16) {
     let has_n = !g.normals.is_empty();
     let has_uv = !g.uvs.is_empty();
     let flags = (has_n as u8) | ((has_uv as u8) << 1);
 
     w.u16(g.shader_index);
+    w.u16(tex_index as u16); // -1 = no texture
     w.u8(flags);
     w.u8(0);
     w.u32(g.positions.len() as u32);
@@ -98,14 +100,20 @@ fn write_geometry(w: &mut W, g: &Geometry) {
     }
 }
 
-pub fn serialize(parts: &[Part], texs: &[DecodedTexture]) -> Vec<u8> {
+/// `shader_tex_index[shader_index]` = index into `texs` for that shader's
+/// diffuse texture, or -1 for none.
+pub fn serialize(parts: &[Part], texs: &[DecodedTexture], shader_tex_index: &[i16]) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
-    w.u8(3);
+    w.u8(4);
     w.u8(0);
     w.u16(0);
     w.u32(parts.len() as u32);
     w.u32(texs.len() as u32);
+
+    let tex_for = |g: &Geometry| -> i16 {
+        shader_tex_index.get(g.shader_index as usize).copied().unwrap_or(-1)
+    };
 
     for p in parts {
         let name = p.name.as_bytes();
@@ -125,7 +133,7 @@ pub fn serialize(parts: &[Part], texs: &[DecodedTexture]) -> Vec<u8> {
         }
         w.u32(p.geometries.len() as u32);
         for g in &p.geometries {
-            write_geometry(&mut w, g);
+            write_geometry(&mut w, g, tex_for(g));
         }
     }
 
