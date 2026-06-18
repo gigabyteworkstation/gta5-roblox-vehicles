@@ -33,6 +33,7 @@ const PLH_CAPACITY: usize = 0x0A;
 const MODEL_GEOMETRIES_PTR: usize = 0x08;
 const MODEL_GEOM_COUNT: usize = 0x10;
 const MODEL_SHADERMAP_PTR: usize = 0x20;
+const MODEL_SKELETON_BINDING: usize = 0x28; // u32: bone index in high byte (>>24)
 
 const GEO_VB_PTR: usize = 0x18;
 const GEO_IB_PTR: usize = 0x38;
@@ -72,6 +73,9 @@ pub struct Geometry {
     pub skinned: bool,
     pub bone_idx: Vec<[u16; 4]>,
     pub bone_wt: Vec<[u8; 4]>,
+    /// for RIGID (unskinned) models: the single skeleton bone this whole
+    /// geometry is bound to (DrawableModel.SkeletonBinding high byte).
+    pub bound_bone: Option<u16>,
 }
 
 pub struct Mesh {
@@ -243,6 +247,10 @@ fn decode_drawable(
         let shadermap_ptr = rsc.u64_at(model, MODEL_SHADERMAP_PTR)?;
         let geo_ptrs = rsc.ptr_array(geo_arr, geo_count)?;
 
+        // Rigid models bind their whole geometry to one bone (high byte).
+        let binding = rsc.u32_at(model, MODEL_SKELETON_BINDING).unwrap_or(0);
+        let bound_bone = ((binding >> 24) & 0xFF) as u16;
+
         for (gi, &geo) in geo_ptrs.iter().enumerate() {
             if geo == 0 {
                 continue;
@@ -254,6 +262,7 @@ fn decode_drawable(
             };
             let mut g = decode_geometry(rsc, geo, shader_index)?;
             g.part = part.to_string();
+            g.bound_bone = Some(bound_bone);
             if let Some(m) = transform {
                 for p in &mut g.positions {
                     *p = xform_point(m, *p);

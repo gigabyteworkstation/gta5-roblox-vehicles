@@ -46,11 +46,11 @@ fn is_articulated(name: &str) -> bool {
     articulated_spec(name).is_some()
 }
 
-/// Dominant bone (skeleton index) for a triangle: the bone with the greatest
-/// summed weight across its three vertices. Returns None for unskinned geoms.
+/// Dominant bone (skeleton index) for a triangle: per-vertex weight for skinned
+/// geoms, else the rigid model's bound bone.
 fn triangle_bone(g: &Geometry, a: usize, b: usize, c: usize) -> Option<u16> {
     if !g.skinned || g.bone_idx.is_empty() {
-        return None;
+        return g.bound_bone;
     }
     let mut acc: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
     for &v in &[a, b, c] {
@@ -75,6 +75,7 @@ fn extract(src: &Geometry, tris: &[(usize, usize, usize)]) -> Geometry {
         fvf_flags: src.fvf_flags,
         fvf_types: src.fvf_types,
         skinned: src.skinned,
+        bound_bone: src.bound_bone,
         ..Default::default()
     };
     let mut map = |old: usize, g: &mut Geometry| -> u32 {

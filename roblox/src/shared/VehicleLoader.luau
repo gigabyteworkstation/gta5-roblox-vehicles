@@ -104,7 +104,11 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, 
 	if res ~= Enum.CreateContentResult.Success then
 		return nil
 	end
-	return AssetService:CreateMeshPartAsync(content, BAKE_OPTIONS)
+	local part = AssetService:CreateMeshPartAsync(content, BAKE_OPTIONS)
+	-- Render both faces: GTA panels are single-sided, so open parts (hood, doors)
+	-- would otherwise be see-through from the back.
+	part.DoubleSided = true
+	return part
 end
 
 function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model
