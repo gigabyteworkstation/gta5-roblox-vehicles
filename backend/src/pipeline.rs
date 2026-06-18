@@ -1,11 +1,26 @@
 //! End-to-end: vehicle name -> wire bytes. Shared by the CLI and the server.
 
-use crate::archive::{Archive, GtaKeys};
+use crate::archive::{default_keys_dir, Archive, GtaKeys};
+use crate::handling::{self, Handling};
 use crate::rsc7::Rsc7;
 use crate::textures::DecodedTexture;
 use crate::{parts, shaders, skeleton, textures, wire, yft};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+
+/// Load the vehicle's handling block from `common.rpf` (sibling of x64e.rpf in
+/// the keys dir). Best-effort: returns None if common.rpf isn't present so the
+/// client falls back to its embedded defaults. The handling id is the model
+/// base name uppercased (e.g. zion_hi -> ZION), matching vehicles.meta.
+fn load_handling(keys: &GtaKeys, name: &str) -> Option<Handling> {
+    let path = default_keys_dir().join("common.rpf");
+    let common = Archive::open(&path, Some(keys)).ok()?;
+    let file = common.find_file("handling.meta")?;
+    let bytes = common.extract(file, Some(keys)).ok()?;
+    let xml = String::from_utf8_lossy(&bytes);
+    let id = name.trim_end_matches("_hi").to_uppercase();
+    handling::parse(&xml, &id)
+}
 
 fn decode_ytd(veh: &Archive, keys: &GtaKeys, name: &str) -> Vec<DecodedTexture> {
     veh.find_file(name)
@@ -131,5 +146,42 @@ pub fn build_vehicle(
         })
         .collect();
 
-    Ok(wire::serialize(&grouped, &textures, &materials, &wheels))
+    // Wheel radius: the "wheel" part mesh is centred on its axle (RAGE X), so
+    // the tyre radius is the max extent in the Y/Z plane.
+    let wheel_radius = grouped
+        .iter()
+        .filter(|p| p.name == "wheel")
+        .flat_map(|p| p.geometries.iter())
+        .flat_map(|g| g.positions.iter())
+        .map(|p| (p[1] * p[1] + p[2] * p[2]).sqrt())
+        .fold(0.0f32, f32::max)
+        .max(0.05);
+
+    // Body AABB (everything except the wheel) for sizing the collision hull.
+    let mut body_min = [f32::INFINITY; 3];
+    let mut body_max = [f32::NEG_INFINITY; 3];
+    for p in grouped.iter().filter(|p| p.name != "wheel") {
+        for g in &p.geometries {
+            for v in &g.positions {
+                for k in 0..3 {
+                    body_min[k] = body_min[k].min(v[k]);
+                    body_max[k] = body_max[k].max(v[k]);
+                }
+            }
+        }
+    }
+    if !body_min[0].is_finite() {
+        body_min = [0.0; 3];
+        body_max = [0.0; 3];
+    }
+
+    let handling = load_handling(keys, name);
+    let phys = wire::Physics {
+        wheel_radius,
+        body_min,
+        body_max,
+        handling: handling.as_ref(),
+    };
+
+    Ok(wire::serialize(&grouped, &textures, &materials, &wheels, &phys))
 }

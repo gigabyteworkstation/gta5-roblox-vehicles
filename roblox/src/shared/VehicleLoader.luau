@@ -8,8 +8,11 @@
 
 local AssetService = game:GetService("AssetService")
 local HttpService = game:GetService("HttpService")
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
 
 local VehicleWire = require(script.Parent.VehicleWire)
+local VehiclePhysics = require(script.Parent.VehiclePhysics)
 
 local VehicleLoader = {}
 
@@ -169,20 +172,38 @@ local function applyMaterial(part: MeshPart, cache: { [number]: Content }, geom:
 	end
 end
 
--- Instance the centered "wheel" mesh at each wheel bone. Right-side wheels are
--- rotated 180° about up so the outer face points out (GTA mirrors the mesh).
--- Each wheel attaches to the body via a free HingeConstraint about the axle
--- (the car's lateral axis) so it can spin/roll.
-local function buildWheels(
+-- Suspension rest sag as a fraction of travel; MUST match VehiclePhysics so the
+-- wheel rest position lands on its bone.
+local SUSP_REST_RATIO = 0.5
+
+-- Body RAGE-space AABB -> Roblox-space (center, size) in studs. The mapping is
+-- an axis permutation with a sign flip, so size is taken as absolute extents.
+local function bodyAABB(vehicle: VehicleWire.Vehicle): (Vector3, Vector3)
+	local mn, mx = vehicle.bodyMin, vehicle.bodyMax
+	local center = rageVec((mn + mx) * 0.5)
+	local size = Vector3.new(math.abs(mx.X - mn.X), math.abs(mx.Z - mn.Z), math.abs(mx.Y - mn.Y))
+		* STUDS_PER_METER
+	return center, size
+end
+
+-- Set a part's mass (approx) via density, clamped to Roblox's [0.01, 100] range.
+local function setMass(part: BasePart, mass: number, friction: number)
+	local vol = part.Size.X * part.Size.Y * part.Size.Z
+	local density = math.clamp(mass / math.max(vol, 0.01), 0.01, 100)
+	part.CustomPhysicalProperties = PhysicalProperties.new(density, friction, 0, 1, 1)
+end
+
+-- Build the visual wheels (mirrored on the right) as massless meshes welded to
+-- the chassis; the Weld's C0 is driven each frame by VehiclePhysics. Returns the
+-- per-wheel config the physics needs (strut hardpoint, front/left flags).
+local function buildPhysWheels(
 	vehicle: VehicleWire.Vehicle,
-	container: Instance,
-	bodyBase: BasePart?,
+	chassis: BasePart,
+	chassisCenter: Vector3,
+	suspLen: number,
 	cache: { [number]: Content }
-): { BasePart }
-	local out: { BasePart } = {}
-	if not bodyBase then
-		return out
-	end
+): { VehiclePhysics.WheelCfg }
+	local cfgs: { VehiclePhysics.WheelCfg } = {}
 	local wheelGeoms: { VehicleWire.Geometry }? = nil
 	for _, p in vehicle.parts do
 		if p.name == "wheel" then
@@ -191,54 +212,175 @@ local function buildWheels(
 		end
 	end
 	if not wheelGeoms then
-		return out
+		return cfgs
 	end
 
-	-- Right-side wheels get a mirrored mesh (GTA's negative-scale mirror) so the
-	-- rim's outer face points outward on both sides.
 	for _, wheel in vehicle.wheels do
 		local part = buildPartMesh(vehicle.buffer, wheelGeoms, wheel.mirror)
 		if part then
 			applyMaterial(part, cache, wheelGeoms[1])
-			part.Anchored = true
-			part.CanCollide = false
 			part.Name = "wheel"
-			local pos = rageVec(wheel.pos)
-			part.CFrame = CFrame.new(pos)
-			part.Parent = container
+			part.Massless = true
+			part.CanCollide = false
+			part.Anchored = false
+			part.Parent = chassis
 
-			-- Spin hinge about the axle (car lateral axis = world X). a0 sits on
-			-- the body at the wheel position; a1 sits at the wheel's LOCAL origin
-			-- (the mesh is centered on the axle).
-			local a0 = Instance.new("Attachment")
-			a0.WorldCFrame = axisCFrame(pos, Vector3.xAxis)
-			a0.Parent = bodyBase
-			local a1 = Instance.new("Attachment")
-			a1.CFrame = axisCFrame(Vector3.zero, Vector3.xAxis) -- local, at the axle
-			a1.Parent = part
-			local hinge = Instance.new("HingeConstraint")
-			hinge.Name = "wheel_spin"
-			hinge.Attachment0 = a0
-			hinge.Attachment1 = a1
-			hinge.ActuatorType = Enum.ActuatorType.None -- free spin
-			hinge.Parent = part
+			local posLocal = rageVec(wheel.pos) - chassisCenter
+			local weld = Instance.new("Weld")
+			weld.Part0 = chassis
+			weld.Part1 = part
+			weld.C0 = CFrame.new(posLocal)
+			weld.Parent = part
 
-			table.insert(out, part)
+			cfgs[#cfgs + 1] = {
+				part = part,
+				weld = weld,
+				hardpoint = posLocal + Vector3.yAxis * (suspLen * SUSP_REST_RATIO),
+				front = posLocal.Z < 0, -- RAGE +Y (forward) maps to Roblox -Z
+				left = not wheel.mirror,
+			}
 		end
 	end
-	return out
+	return cfgs
+end
+
+-- Invisible VehicleSeat (input + seating) welded at the driver position.
+local function createSeat(vehicle: VehicleWire.Vehicle, chassis: BasePart, size: Vector3): VehicleSeat
+	local seat = Instance.new("VehicleSeat")
+	seat.Name = "DriverSeat"
+	seat.Size = Vector3.new(4, 1, 3)
+	seat.Transparency = 1
+	seat.CanCollide = false
+	seat.Massless = true
+	seat.MaxSpeed = 0 -- we read Throttle/Steer; the seat doesn't actuate
+	seat.Torque = 0
+	seat.TurnSpeed = 0
+	seat.HeadsUpDisplay = false
+
+	-- Driver seat: left side, just above the floor, plus GTA's fSeatOffsetDist.
+	local floorY = -size.Y * 0.5
+	local seatLocal = Vector3.new(-size.X * 0.18, floorY + 2.4, -size.Z * 0.05)
+	if vehicle.handling then
+		seatLocal += rageVec(vehicle.handling.seatOffset)
+	end
+	seat.CFrame = chassis.CFrame * CFrame.new(seatLocal)
+	local weld = Instance.new("Weld")
+	weld.Part0 = chassis
+	weld.Part1 = seat
+	weld.C0 = CFrame.new(seatLocal)
+	weld.Parent = seat
+	seat.Parent = chassis
+	return seat
+end
+
+-- ProximityPrompt to enter (sit) on the driver door; handbrake (Space) + exit
+-- (F) bound while the local player is the occupant. Runs client-side.
+local function setupInteraction(
+	model: Model,
+	chassis: BasePart,
+	seat: VehicleSeat,
+	rep: { [string]: BasePart },
+	handbrake: { v: boolean }
+)
+	local anchorPart: BasePart = rep["door_dside_f"] or rep["door_dside"] or chassis
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Enter"
+	prompt.ObjectText = model.Name
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = anchorPart
+
+	prompt.Triggered:Connect(function(player)
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum and not seat.Occupant then
+			seat:Sit(hum)
+		end
+	end)
+
+	local function bind()
+		ContextActionService:BindAction("VehHandbrake", function(_, state)
+			handbrake.v = state == Enum.UserInputState.Begin
+			return Enum.ContextActionResult.Sink -- swallow the seat's jump-exit
+		end, false, Enum.KeyCode.Space)
+		ContextActionService:BindAction("VehExit", function(_, state)
+			if state == Enum.UserInputState.Begin and seat.Occupant then
+				seat.Occupant.Sit = false
+			end
+			return Enum.ContextActionResult.Sink
+		end, false, Enum.KeyCode.F)
+	end
+	local function unbind()
+		handbrake.v = false
+		ContextActionService:UnbindAction("VehHandbrake")
+		ContextActionService:UnbindAction("VehExit")
+	end
+
+	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+		local char = Players.LocalPlayer and Players.LocalPlayer.Character
+		local localHum = char and char:FindFirstChildOfClass("Humanoid")
+		if seat.Occupant and seat.Occupant == localHum then
+			prompt.Enabled = false
+			bind()
+		else
+			prompt.Enabled = true
+			unbind()
+		end
+	end)
 end
 
 function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model
 	local vehicle = VehicleWire.parse(data)
 	local cache = buildTextureCache(vehicle)
+	local h = vehicle.handling
 
 	local model = Instance.new("Model")
 	model.Name = name
 
-	-- Each bone-part's FIRST MeshPart is its representative; the part's other
-	-- texture sub-meshes parent under it, and child bone-parts parent under the
-	-- parent bone's representative (GTA bone hierarchy, MeshPart→MeshPart).
+	local center, size = bodyAABB(vehicle)
+
+	-- Chassis collider: the invisible, mass-bearing physics root. Inset and
+	-- floored so the visible body overhangs it and the box never scrapes (the
+	-- raycast wheels hold the car up).
+	local chassis = Instance.new("Part")
+	chassis.Name = "ChassisCollider"
+	chassis.Size = Vector3.new(size.X * 0.85, size.Y * 0.55, size.Z * 0.95)
+	chassis.CFrame = CFrame.new(center - Vector3.yAxis * size.Y * 0.18)
+	chassis.Transparency = 1
+	chassis.CanCollide = true
+	chassis.Anchored = true -- held until everything is positioned
+	chassis.TopSurface = Enum.SurfaceType.Smooth
+	chassis.BottomSurface = Enum.SurfaceType.Smooth
+	local mass = if h then h.mass else 1400
+	setMass(chassis, mass * 0.45, 0.2)
+	chassis.Parent = model
+	model.PrimaryPart = chassis
+	local chassisCenter = chassis.Position
+
+	-- Ballast: carries most of the mass low for GTA-like roll stability (the
+	-- real low centre of mass), nudged by handling vecCentreOfMassOffset.
+	local ballast = Instance.new("Part")
+	ballast.Name = "Ballast"
+	ballast.Size = Vector3.new(size.X * 0.5, 1, size.Z * 0.6)
+	ballast.Transparency = 1
+	ballast.CanCollide = false
+	ballast.Anchored = false
+	ballast.CFrame = CFrame.new(center - Vector3.yAxis * (size.Y * 0.5 - 1))
+	if h then
+		ballast.CFrame += rageVec(h.comOffset)
+	end
+	setMass(ballast, mass * 0.55, 0)
+	ballast.Parent = model
+	do
+		local w = Instance.new("WeldConstraint")
+		w.Part0 = chassis
+		w.Part1 = ballast
+		w.Parent = ballast
+	end
+
+	-- Each bone-part's FIRST MeshPart is its representative; sub-meshes parent
+	-- under it, child bone-parts under the parent bone's rep (GTA hierarchy).
 	local rep: { [string]: BasePart } = {}
 	local function place(pname: string, part: BasePart)
 		local r = rep[pname]
@@ -249,33 +391,37 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 			part.Parent = model
 		end
 	end
+	local function weldToChassis(part: BasePart)
+		local w = Instance.new("WeldConstraint")
+		w.Part0 = chassis
+		w.Part1 = part
+		w.Parent = part
+	end
 
-	-- Body: anchored, split by texture. The "wheel" part is instanced separately.
-	local bodyBase: BasePart? = nil
+	-- Body: massless visual meshes welded rigidly to the chassis.
 	for _, p in vehicle.parts do
 		if not p.articulated and p.name ~= "wheel" then
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
-					part.Anchored = true
+					part.Anchored = false
 					part.CanCollide = false
+					part.Massless = true
 					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
 					place(p.name, part)
-					if not bodyBase then
-						bodyBase = part
-					end
+					weldToChassis(part)
 				end
 			end
 		end
 	end
 
-	-- Articulated: split by texture (welded into one assembly), Servo hinge on
-	-- the root sub-part.
+	-- Articulated parts: Servo hinge to the chassis (doors/hood/boot). Held
+	-- anchored until release so they don't droop before the servo engages.
 	local articulated: { BasePart } = {}
 	for _, p in vehicle.parts do
-		if p.articulated and p.hinge and bodyBase then
-			local h = p.hinge
+		if p.articulated and p.hinge then
+			local hh = p.hinge
 			local root: BasePart? = nil
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
@@ -298,10 +444,10 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 			end
 
 			if root then
-				local cf = axisCFrame(rageVec(h.pos), rageDir(h.axis))
+				local cf = axisCFrame(rageVec(hh.pos), rageDir(hh.axis))
 				local a0 = Instance.new("Attachment")
 				a0.WorldCFrame = cf
-				a0.Parent = bodyBase
+				a0.Parent = chassis
 				local a1 = Instance.new("Attachment")
 				a1.WorldCFrame = cf
 				a1.Parent = root
@@ -311,8 +457,8 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 				hinge.Attachment0 = a0
 				hinge.Attachment1 = a1
 				hinge.LimitsEnabled = true
-				hinge.LowerAngle = math.min(0, math.deg(h.minAngle))
-				hinge.UpperAngle = math.max(5, math.deg(h.maxAngle))
+				hinge.LowerAngle = math.min(0, math.deg(hh.minAngle))
+				hinge.UpperAngle = math.max(5, math.deg(hh.maxAngle))
 				hinge.ActuatorType = Enum.ActuatorType.Servo
 				hinge.ServoMaxTorque = 100000
 				hinge.AngularSpeed = 2
@@ -322,10 +468,12 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
-	local wheels = buildWheels(vehicle, bodyBase or model, bodyBase, cache)
+	local suspLen =
+		math.max((if h then (h.suspensionUpperLimit - h.suspensionLowerLimit) else 0.25) * STUDS_PER_METER, 0.3)
+	local wheelCfgs = buildPhysWheels(vehicle, chassis, chassisCenter, suspLen, cache)
+	local seat = createSeat(vehicle, chassis, size)
 
-	-- Parent each part's representative under its parent part's representative
-	-- (GTA bone hierarchy). Done last so all reps exist.
+	-- Parent each part's representative under its parent (GTA bone hierarchy).
 	for _, p in vehicle.parts do
 		local r = rep[p.name]
 		if r and p.parent ~= "" and rep[p.parent] and p.parent ~= p.name then
@@ -337,12 +485,37 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	if pivot then
 		model:PivotTo(pivot)
 	end
-	-- Release dynamic parts now that everything is positioned.
+
+	-- Release: unanchor the chassis (welded body/wheels/ballast follow) and the
+	-- hinged parts, so the car drops onto its suspension.
+	chassis.Anchored = false
 	for _, r in articulated do
 		r.Anchored = false
 	end
-	for _, w in wheels do
-		w.Anchored = false
+
+	-- Drive it: raycast suspension physics + character interaction.
+	if h then
+		local rp = RaycastParams.new()
+		rp.FilterType = Enum.RaycastFilterType.Exclude
+		rp.FilterDescendantsInstances = { model }
+		local handbrake = { v = false }
+		local controller = VehiclePhysics.start({
+			chassis = chassis,
+			seat = seat,
+			wheels = wheelCfgs,
+			handling = h,
+			wheelRadius = vehicle.wheelRadius * STUDS_PER_METER,
+			suspensionLength = suspLen,
+			raycastParams = rp,
+			getHandbrake = function()
+				return handbrake.v
+			end,
+		})
+		model:SetAttribute("HasPhysics", true)
+		model.Destroying:Connect(function()
+			controller:destroy()
+		end)
+		setupInteraction(model, chassis, seat, rep, handbrake)
 	end
 
 	return model

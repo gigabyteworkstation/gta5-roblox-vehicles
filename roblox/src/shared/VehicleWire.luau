@@ -40,11 +40,46 @@ export type Texture = { name: string, width: number, height: number, rgbaOffset:
 
 export type Wheel = { pos: Vector3, mirror: boolean } -- pos in RAGE space
 
+-- GTA handling.meta CHandlingData (the inputs to RAGE's wheel/suspension model).
+export type Handling = {
+	mass: number,
+	dragCoeff: number,
+	comOffset: Vector3,
+	inertiaMult: Vector3,
+	driveBiasFront: number,
+	driveGears: number,
+	driveForce: number,
+	driveMaxFlatVel: number,
+	brakeForce: number,
+	brakeBiasFront: number,
+	handbrakeForce: number,
+	steeringLock: number, -- degrees
+	tractionCurveMax: number,
+	tractionCurveMin: number,
+	tractionCurveLateral: number,
+	tractionBiasFront: number,
+	lowSpeedTractionLoss: number,
+	suspensionForce: number,
+	suspensionCompDamp: number,
+	suspensionReboundDamp: number,
+	suspensionUpperLimit: number, -- metres
+	suspensionLowerLimit: number,
+	suspensionRaise: number,
+	suspensionBiasFront: number,
+	antiRollForce: number,
+	antiRollBiasFront: number,
+	seatOffset: Vector3,
+}
+
 export type Vehicle = {
 	buffer: buffer,
 	parts: { Part },
 	textures: { Texture },
 	wheels: { Wheel },
+	wheelRadius: number, -- metres (RAGE)
+	bodyMin: Vector3, -- RAGE-space body AABB
+	bodyMax: Vector3,
+	handling: Handling?,
 }
 
 local MAGIC = "GVEH"
@@ -98,10 +133,48 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 
 	assert(r:fixedString(4) == MAGIC, "bad magic (expected GVEH)")
 	local _version = r:u8()
-	r:skip(3)
+	local hasHandling = r:u8() == 1
+	r:skip(2)
 	local partCount = r:u32()
 	local texCount = r:u32()
 	local wheelCount = r:u32()
+
+	-- Physical header: wheel radius + body AABB (RAGE space), then handling.
+	local wheelRadius = r:f32()
+	local bodyMin = Vector3.new(r:f32(), r:f32(), r:f32())
+	local bodyMax = Vector3.new(r:f32(), r:f32(), r:f32())
+	local handling: Handling? = nil
+	if hasHandling then
+		handling = {
+			mass = r:f32(),
+			dragCoeff = r:f32(),
+			comOffset = Vector3.new(r:f32(), r:f32(), r:f32()),
+			inertiaMult = Vector3.new(r:f32(), r:f32(), r:f32()),
+			driveBiasFront = r:f32(),
+			driveGears = r:f32(),
+			driveForce = r:f32(),
+			driveMaxFlatVel = r:f32(),
+			brakeForce = r:f32(),
+			brakeBiasFront = r:f32(),
+			handbrakeForce = r:f32(),
+			steeringLock = r:f32(),
+			tractionCurveMax = r:f32(),
+			tractionCurveMin = r:f32(),
+			tractionCurveLateral = r:f32(),
+			tractionBiasFront = r:f32(),
+			lowSpeedTractionLoss = r:f32(),
+			suspensionForce = r:f32(),
+			suspensionCompDamp = r:f32(),
+			suspensionReboundDamp = r:f32(),
+			suspensionUpperLimit = r:f32(),
+			suspensionLowerLimit = r:f32(),
+			suspensionRaise = r:f32(),
+			suspensionBiasFront = r:f32(),
+			antiRollForce = r:f32(),
+			antiRollBiasFront = r:f32(),
+			seatOffset = Vector3.new(r:f32(), r:f32(), r:f32()),
+		}
+	end
 
 	local parts: { Part } = table.create(partCount) :: { Part }
 	for i = 1, partCount do
@@ -154,7 +227,16 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 		wheels[i] = { pos = Vector3.new(x, y, z), mirror = mirror }
 	end
 
-	return { buffer = buf, parts = parts, textures = textures, wheels = wheels }
+	return {
+		buffer = buf,
+		parts = parts,
+		textures = textures,
+		wheels = wheels,
+		wheelRadius = wheelRadius,
+		bodyMin = bodyMin,
+		bodyMax = bodyMax,
+		handling = handling,
+	}
 end
 
 return VehicleWire

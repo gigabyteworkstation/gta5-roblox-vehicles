@@ -39,6 +39,7 @@
 //!   u16  width, u16 height
 //!   u8   rgba[width*height*4]
 
+use crate::handling::Handling;
 use crate::parts::Part;
 use crate::textures::DecodedTexture;
 use crate::yft::Geometry;
@@ -114,6 +115,52 @@ fn write_geometry(w: &mut W, g: &Geometry, mat: Material) {
     }
 }
 
+/// Physical metadata derived from the .yft + handling.meta for the client's
+/// raycast-suspension vehicle model.
+pub struct Physics<'a> {
+    pub wheel_radius: f32,    // metres
+    pub body_min: [f32; 3],   // RAGE-space AABB of the body geometry
+    pub body_max: [f32; 3],
+    pub handling: Option<&'a Handling>,
+}
+
+fn write_handling(w: &mut W, h: &Handling) {
+    let f = |w: &mut W, v: f32| w.f32(v);
+    f(w, h.mass);
+    f(w, h.drag_coeff);
+    f(w, h.com_offset[0]);
+    f(w, h.com_offset[1]);
+    f(w, h.com_offset[2]);
+    f(w, h.inertia_mult[0]);
+    f(w, h.inertia_mult[1]);
+    f(w, h.inertia_mult[2]);
+    f(w, h.drive_bias_front);
+    f(w, h.drive_gears);
+    f(w, h.drive_force);
+    f(w, h.drive_max_flat_vel);
+    f(w, h.brake_force);
+    f(w, h.brake_bias_front);
+    f(w, h.handbrake_force);
+    f(w, h.steering_lock);
+    f(w, h.traction_curve_max);
+    f(w, h.traction_curve_min);
+    f(w, h.traction_curve_lateral);
+    f(w, h.traction_bias_front);
+    f(w, h.low_speed_traction_loss);
+    f(w, h.suspension_force);
+    f(w, h.suspension_comp_damp);
+    f(w, h.suspension_rebound_damp);
+    f(w, h.suspension_upper_limit);
+    f(w, h.suspension_lower_limit);
+    f(w, h.suspension_raise);
+    f(w, h.suspension_bias_front);
+    f(w, h.anti_roll_force);
+    f(w, h.anti_roll_bias_front);
+    f(w, h.seat_offset[0]);
+    f(w, h.seat_offset[1]);
+    f(w, h.seat_offset[2]);
+}
+
 /// `materials[shader_index]` = the material for that shader. `wheels` are the
 /// (RAGE-space position, mirror) of each wheel bone to instance the "wheel" part.
 pub fn serialize(
@@ -121,15 +168,28 @@ pub fn serialize(
     texs: &[DecodedTexture],
     materials: &[Material],
     wheels: &[([f32; 3], bool)],
+    phys: &Physics,
 ) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
-    w.u8(7);
-    w.u8(0);
+    w.u8(8);
+    w.u8(phys.handling.is_some() as u8);
     w.u16(0);
     w.u32(parts.len() as u32);
     w.u32(texs.len() as u32);
     w.u32(wheels.len() as u32);
+
+    // Physical header: wheel radius + body AABB (RAGE space), then handling.
+    w.f32(phys.wheel_radius);
+    for v in phys.body_min {
+        w.f32(v);
+    }
+    for v in phys.body_max {
+        w.f32(v);
+    }
+    if let Some(h) = phys.handling {
+        write_handling(&mut w, h);
+    }
 
     let mat_for = |g: &Geometry| -> Material {
         materials.get(g.shader_index as usize).copied().unwrap_or(Material::NONE)

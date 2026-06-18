@@ -1,6 +1,7 @@
 --!strict
--- Client: ask the server for vehicle bytes, build the rigid parts + hinges,
--- then demo the HingeConstraints by opening the doors / hood / boot.
+-- Client: ask the server for the vehicle bytes, build the physical car, and
+-- leave it drivable. Walk up to the driver door, press the prompt to get in,
+-- then WASD to drive, Space = handbrake, F = exit.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VehicleLoader = require(ReplicatedStorage:WaitForChild("GtaVehicles"):WaitForChild("VehicleLoader"))
@@ -21,13 +22,5 @@ end
 
 local model = result :: Model
 print(`[GtaVehicle] built {VEHICLE}: {#model:GetChildren()} parts`)
-
--- Demo the hinges: open everything to its GTA angle, then close, looping.
-task.wait(1.5)
-while model.Parent do
-	VehicleLoader.openAll(model)
-	print("[GtaVehicle] opened all (GTA angles)")
-	task.wait(3)
-	VehicleLoader.closeAll(model)
-	task.wait(3)
-end
+print("[GtaVehicle] Walk to the driver door and press the prompt to enter.")
+print("[GtaVehicle] Drive: W/S throttle+brake, A/D steer, Space handbrake, F exit.")

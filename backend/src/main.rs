@@ -2,6 +2,7 @@
 //! List vehicle assets and extract one vehicle's raw resource bytes.
 
 mod archive;
+mod handling;
 mod joints;
 mod parts;
 mod pipeline;
@@ -48,6 +49,14 @@ enum Commands {
         /// Vehicle/asset base name, e.g. "zion_hi"
         name: String,
         /// Output directory
+        #[arg(long, default_value = "out")]
+        out: PathBuf,
+    },
+
+    /// Extract one raw file from the archive (e.g. "handling.meta") to ./out
+    Extract {
+        /// File name inside the archive
+        file: String,
         #[arg(long, default_value = "out")]
         out: PathBuf,
     },
@@ -196,6 +205,11 @@ fn run() -> Result<()> {
                     extract_one(&veh, &keys, &cand, out)?;
                 }
             }
+        }
+
+        Commands::Extract { file, out } => {
+            std::fs::create_dir_all(out)?;
+            extract_one(&veh, &keys, file, out)?;
         }
 
         Commands::Inspect { name } => {
