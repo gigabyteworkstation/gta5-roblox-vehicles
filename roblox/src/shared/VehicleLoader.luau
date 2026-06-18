@@ -83,7 +83,7 @@ local function buildGeometry(
 				local b = bones[skelIdx + 1]
 				local cf = if b then CFrame.new(rageSwap(b.pos)) else CFrame.identity
 				local name = if b then b.name else `bone_{skelIdx}`
-				id = (mesh :: any):AddBone({ Name = name, ParentId = -1, CFrame = cf })
+				id = (mesh :: any):AddBone({ Name = name, ParentId = -1, CFrame = cf, Virtual = false })
 				boneMap[skelIdx] = id
 				table.insert(used, { name = name, cframe = cf })
 				return id
