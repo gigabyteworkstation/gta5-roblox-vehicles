@@ -42,8 +42,30 @@ fn articulated_spec(name: &str) -> Option<([f32; 3], f32)> {
     }
 }
 
-fn is_articulated(name: &str) -> bool {
-    articulated_spec(name).is_some()
+/// Resolve which PART a bone's geometry belongs to. GTA composes an articulated
+/// part from its bone plus all descendant bones, so walk up the hierarchy: if an
+/// articulated ancestor exists, the geometry belongs to it (e.g. window_lf →
+/// door_dside_f, misc_d → bonnet). Otherwise the bone is its own body component.
+fn resolve_part(bones: &[Bone], bone_idx: u16) -> String {
+    let mut cur = bone_idx as usize;
+    for _ in 0..256 {
+        match bones.get(cur) {
+            Some(b) => {
+                if articulated_spec(&b.name).is_some() {
+                    return b.name.clone();
+                }
+                if b.parent < 0 {
+                    break;
+                }
+                cur = b.parent as usize;
+            }
+            None => break,
+        }
+    }
+    match bones.get(bone_idx as usize) {
+        Some(b) if !b.name.is_empty() => b.name.clone(),
+        _ => "body".to_string(),
+    }
 }
 
 /// Dominant bone (skeleton index) for a triangle: per-vertex weight for skinned
@@ -115,14 +137,15 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
     // Group EVERY triangle by its bone (GTA groups vehicle meshes by bone).
     // part name -> (source geometry index -> triangles). Unskinned triangles go
     // to a "body" catch-all.
+    let _ = bone_name;
     let mut groups: HashMap<String, HashMap<usize, Vec<(usize, usize, usize)>>> = HashMap::new();
     for (gi, g) in mesh.geometries.iter().enumerate() {
         let idx = &g.indices;
         for t in (0..idx.len().saturating_sub(2)).step_by(3) {
             let (a, b, c) = (idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize);
-            let name = match triangle_bone(g, a, b, c).map(bone_name) {
-                Some(n) if !n.is_empty() => n.to_string(),
-                _ => "body".to_string(),
+            let name = match triangle_bone(g, a, b, c) {
+                Some(bi) => resolve_part(bones, bi),
+                None => "body".to_string(),
             };
             groups.entry(name).or_default().entry(gi).or_default().push((a, b, c));
         }
