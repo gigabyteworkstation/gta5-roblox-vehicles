@@ -2,7 +2,7 @@
 
 use crate::archive::{Archive, GtaKeys};
 use crate::rsc7::Rsc7;
-use crate::{textures, wire, yft};
+use crate::{skeleton, textures, wire, yft};
 use anyhow::{Context, Result};
 
 pub fn build_vehicle(
@@ -19,6 +19,8 @@ pub fn build_vehicle(
     let rsc = veh.extract(file, Some(keys))?;
     let r = Rsc7::parse(&rsc)?;
     let mesh = yft::decode(&r)?;
+    let bones = skeleton::parse(&r)?;
+    let bone_world = skeleton::world_positions(&bones);
 
     // Textures: base dict + HD dict (named off the base vehicle, not the _hi frag).
     // Off by default — they're large (uncompressed RGBA) and not bound to
@@ -39,5 +41,5 @@ pub fn build_vehicle(
         }
     }
 
-    Ok(wire::serialize(&mesh, &texs))
+    Ok(wire::serialize(&mesh, &texs, &bones, &bone_world))
 }

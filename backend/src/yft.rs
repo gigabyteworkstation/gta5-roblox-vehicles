@@ -38,7 +38,9 @@ const GEO_VB_PTR: usize = 0x18;
 const GEO_IB_PTR: usize = 0x38;
 const GEO_INDICES_COUNT: usize = 0x58;
 const GEO_VERTS_COUNT: usize = 0x60;
+const GEO_BONEIDS_PTR: usize = 0x68;
 const GEO_STRIDE: usize = 0x70;
+const GEO_BONEIDS_COUNT: usize = 0x72; // u16
 
 const VB_STRIDE: usize = 0x08;
 const VB_DATA1_PTR: usize = 0x10;
@@ -65,6 +67,11 @@ pub struct Geometry {
     pub fvf_types: u64,
     /// which part this came from: "body", or a child like "child3"
     pub part: String,
+    /// per-vertex skinning (present when the FVF has BlendWeights+BlendIndices).
+    /// bone_idx are SKELETON bone indices (after the geometry's BoneIds remap).
+    pub skinned: bool,
+    pub bone_idx: Vec<[u16; 4]>,
+    pub bone_wt: Vec<[u8; 4]>,
 }
 
 pub struct Mesh {
@@ -288,6 +295,20 @@ fn decode_geometry(rsc: &Rsc7, geo: u64, shader_index: u16) -> Result<Geometry> 
     let fvf_types = rsc.u64_at(info_ptr, DECL_TYPES)?;
     let offs = channel_offsets(fvf_flags, fvf_types);
 
+    // BoneIds palette: per-vertex BlendIndices index into this list of skeleton
+    // bone indices. If absent, BlendIndices are direct skeleton bone indices.
+    let boneids_ptr = rsc.u64_at(geo, GEO_BONEIDS_PTR)?;
+    let boneids_count = rsc.u16_at(geo, GEO_BONEIDS_COUNT)? as usize;
+    let palette: Vec<u16> = if boneids_ptr != 0 && boneids_count > 0 {
+        rsc.at(boneids_ptr, boneids_count * 2)
+            .map(|b| b.chunks_exact(2).map(|c| u16::from_le_bytes(c.try_into().unwrap())).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // Skinned when both BlendWeights (ch1) and BlendIndices (ch2) are present.
+    let skinned = offs[1].is_some() && offs[2].is_some();
+
     // Bounds check the whole vertex buffer up front.
     let vbytes = rsc
         .at(data_ptr, vertex_count * stride)
@@ -298,6 +319,7 @@ fn decode_geometry(rsc: &Rsc7, geo: u64, shader_index: u16) -> Result<Geometry> 
         stride: stride as u16,
         fvf_flags,
         fvf_types,
+        skinned,
         ..Default::default()
     };
 
@@ -332,6 +354,22 @@ fn decode_geometry(rsc: &Rsc7, geo: u64, shader_index: u16) -> Result<Geometry> 
                 _ => [0.0, 0.0],
             };
             g.uvs.push(uv);
+        }
+        // Skinning: BlendWeights (ch1, UByte4) + BlendIndices (ch2, UByte4).
+        if skinned {
+            let wo = offs[1].unwrap();
+            let io = offs[2].unwrap();
+            let mut idx = [0u16; 4];
+            for k in 0..4 {
+                let bi = v[io + k] as usize;
+                idx[k] = if palette.is_empty() {
+                    bi as u16
+                } else {
+                    *palette.get(bi).unwrap_or(&0)
+                };
+            }
+            g.bone_idx.push(idx);
+            g.bone_wt.push([v[wo], v[wo + 1], v[wo + 2], v[wo + 3]]);
         }
     }
 

@@ -228,22 +228,32 @@ fn run() -> Result<()> {
             let r = Rsc7::parse(&rsc)?;
 
             let mesh = yft::decode(&r)?;
+            let bones = skeleton::parse(&r)?;
+            let bone_name = |idx: u16| -> String {
+                bones.get(idx as usize).map(|b| b.name.clone()).unwrap_or_else(|| format!("#{idx}"))
+            };
             let (mut tv, mut ti) = (0usize, 0usize);
-            println!("\n{yft}: {} geometries", mesh.geometries.len());
+            println!("\n{yft}: {} geometries, {} bones", mesh.geometries.len(), bones.len());
             for (i, g) in mesh.geometries.iter().enumerate() {
                 tv += g.positions.len();
                 ti += g.indices.len();
                 if i < 12 {
+                    // For a skinned geom, show vertex 0's dominant bone (highest weight).
+                    let skin = if g.skinned && !g.bone_idx.is_empty() {
+                        let (idx0, wt0) = (g.bone_idx[0], g.bone_wt[0]);
+                        let best = (0..4).max_by_key(|&k| wt0[k]).unwrap();
+                        format!("  skin→{}", bone_name(idx0[best]))
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "  geom {i:>3}: {:>6} verts  {:>6} tris  stride {:>3}  fvf 0x{:08X}  shader {}  (n={} uv={} col={})",
+                        "  geom {i:>3}: {:>6} verts  {:>6} tris  stride {:>3}  fvf 0x{:08X}  shader {}{}",
                         g.positions.len(),
                         g.indices.len() / 3,
                         g.stride,
                         g.fvf_flags,
                         g.shader_index,
-                        g.normals.len(),
-                        g.uvs.len(),
-                        g.colors.len(),
+                        skin,
                     );
                 }
             }

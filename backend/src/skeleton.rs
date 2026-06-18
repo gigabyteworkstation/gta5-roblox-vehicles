@@ -72,6 +72,32 @@ pub fn parse(rsc: &Rsc7) -> Result<Vec<Bone>> {
     Ok(bones)
 }
 
+/// World-space rest position of each bone, by accumulating local translations up
+/// the parent chain. Ignores rotation — fine for vehicle bones, which are
+/// axis-aligned at rest, and good enough for a first skinned pass (rest pose is
+/// undistorted regardless; rotation only affects deformation quality).
+pub fn world_positions(bones: &[Bone]) -> Vec<[f32; 3]> {
+    let mut world = vec![[0f32; 3]; bones.len()];
+    for i in 0..bones.len() {
+        let mut acc = bones[i].translation;
+        let mut p = bones[i].parent;
+        let mut guard = 0;
+        while p >= 0 && (p as usize) < bones.len() {
+            let pb = &bones[p as usize];
+            acc[0] += pb.translation[0];
+            acc[1] += pb.translation[1];
+            acc[2] += pb.translation[2];
+            p = pb.parent;
+            guard += 1;
+            if guard > 256 {
+                break;
+            }
+        }
+        world[i] = acc;
+    }
+    world
+}
+
 /// Depth of a bone in the hierarchy (for pretty printing). Parent index is into
 /// the bones array; -1 = root.
 fn depth(bones: &[Bone], mut i: i16) -> usize {

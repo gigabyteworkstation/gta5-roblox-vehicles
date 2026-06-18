@@ -6,14 +6,15 @@
 //!
 //! Header:
 //!   u32  magic 'GVEH'
-//!   u8   version (=1)
+//!   u8   version (=2)
 //!   u8   reserved
 //!   u16  reserved
 //!   u32  geometryCount
 //!   u32  textureCount
+//!   u32  boneCount
 //! Geometry[]:
 //!   u16  shaderIndex
-//!   u8   attrFlags (bit0 normals, bit1 uvs)
+//!   u8   attrFlags (bit0 normals, bit1 uvs, bit2 skinned)
 //!   u8   reserved
 //!   u32  vertexCount   (always < 65536 per geometry)
 //!   u32  indexCount
@@ -21,11 +22,17 @@
 //!   f32  normals[vertexCount*3]      (if bit0)
 //!   f32  uvs[vertexCount*2]          (if bit1)
 //!   u16  indices[indexCount]
+//!   if bit2 (skinned), per vertex:   u16 boneIdx[4], u8 weight[4]
 //! Texture[]:
 //!   u16  nameLen, name bytes (utf8)
 //!   u16  width, u16 height
 //!   u8   rgba[width*height*4]
+//! Bone[]:
+//!   u16  nameLen, name bytes (utf8)
+//!   i16  parentIndex (-1 = root)
+//!   f32  worldPos[3]   (RAGE space; client applies the same axis-swap as verts)
 
+use crate::skeleton::Bone;
 use crate::textures::DecodedTexture;
 use crate::yft::Mesh;
 
@@ -52,19 +59,27 @@ impl W {
     }
 }
 
-pub fn serialize(mesh: &Mesh, texs: &[DecodedTexture]) -> Vec<u8> {
+pub fn serialize(
+    mesh: &Mesh,
+    texs: &[DecodedTexture],
+    bones: &[Bone],
+    bone_world: &[[f32; 3]],
+) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
-    w.u8(1);
+    w.u8(2);
     w.u8(0);
     w.u16(0);
     w.u32(mesh.geometries.len() as u32);
     w.u32(texs.len() as u32);
+    w.u32(bones.len() as u32);
 
     for g in &mesh.geometries {
         let has_n = !g.normals.is_empty();
         let has_uv = !g.uvs.is_empty();
-        let flags = (has_n as u8) | ((has_uv as u8) << 1);
+        // Only mark skinned if we actually have a per-vertex entry for each vertex.
+        let has_skin = g.skinned && g.bone_idx.len() == g.positions.len();
+        let flags = (has_n as u8) | ((has_uv as u8) << 1) | ((has_skin as u8) << 2);
 
         w.u16(g.shader_index);
         w.u8(flags);
@@ -94,6 +109,15 @@ pub fn serialize(mesh: &Mesh, texs: &[DecodedTexture]) -> Vec<u8> {
         for &i in &g.indices {
             w.u16(i as u16);
         }
+        if has_skin {
+            for (idx, wt) in g.bone_idx.iter().zip(g.bone_wt.iter()) {
+                w.u16(idx[0]);
+                w.u16(idx[1]);
+                w.u16(idx[2]);
+                w.u16(idx[3]);
+                w.raw(wt);
+            }
+        }
     }
 
     for t in texs {
@@ -103,6 +127,16 @@ pub fn serialize(mesh: &Mesh, texs: &[DecodedTexture]) -> Vec<u8> {
         w.u16(t.width as u16);
         w.u16(t.height as u16);
         w.raw(&t.rgba);
+    }
+
+    for (b, wp) in bones.iter().zip(bone_world.iter()) {
+        let name = b.name.as_bytes();
+        w.u16(name.len() as u16);
+        w.raw(name);
+        w.u16(b.parent as u16); // i16 bit pattern
+        w.f32(wp[0]);
+        w.f32(wp[1]);
+        w.f32(wp[2]);
     }
 
     w.b
