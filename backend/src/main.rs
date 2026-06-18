@@ -6,6 +6,7 @@ mod parts;
 mod pipeline;
 mod rsc7;
 mod server;
+mod shaders;
 mod skeleton;
 mod textures;
 mod wire;
@@ -86,6 +87,11 @@ enum Commands {
 
     /// Group a vehicle's mesh into rigid parts by bone (articulation preview)
     Parts {
+        name: String,
+    },
+
+    /// Print each geometry's shader → diffuse texture name
+    Shaders {
         name: String,
     },
 
@@ -338,6 +344,38 @@ fn run() -> Result<()> {
                     println!("  {:<16} {:>6} verts {:>6} tris  (body)", p.name, verts, tris);
                 }
             }
+        }
+
+        Commands::Shaders { name } => {
+            let yft = format!("{name}.yft");
+            let file = veh.find_file(&yft).with_context(|| format!("{yft} not found"))?;
+            let rsc = veh.extract(file, Some(&keys))?;
+            let r = Rsc7::parse(&rsc)?;
+            let mesh = yft::decode(&r)?;
+            let names = shaders::diffuse_names(&r)?;
+            let tex_map = pipeline::texture_map(&veh, &keys, name, &r);
+            println!("\n{yft}: {} shaders, {} textures available", names.len(), tex_map.len());
+
+            let mut seen = std::collections::BTreeSet::new();
+            for g in &mesh.geometries {
+                if let Some(Some(tex)) = names.get(g.shader_index as usize) {
+                    seen.insert(tex.clone());
+                }
+            }
+            let (mut found, mut missing) = (0, 0);
+            for tex in &seen {
+                match tex_map.get(&tex.to_lowercase()) {
+                    Some(t) => {
+                        found += 1;
+                        println!("  [ok]   {tex:<32} {}x{} {:?}", t.width, t.height, t.format);
+                    }
+                    None => {
+                        missing += 1;
+                        println!("  [MISS] {tex}");
+                    }
+                }
+            }
+            println!("\nresolved {found}/{} used textures ({missing} missing)", seen.len());
         }
 
         Commands::Serve { addr } => {

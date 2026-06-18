@@ -2,8 +2,48 @@
 
 use crate::archive::{Archive, GtaKeys};
 use crate::rsc7::Rsc7;
-use crate::{parts, skeleton, textures, wire, yft};
+use crate::textures::DecodedTexture;
+use crate::{parts, shaders, skeleton, textures, wire, yft};
 use anyhow::{Context, Result};
+use std::collections::HashMap;
+
+fn decode_ytd(veh: &Archive, keys: &GtaKeys, name: &str) -> Vec<DecodedTexture> {
+    veh.find_file(name)
+        .and_then(|f| veh.extract(f, Some(keys)).ok())
+        .and_then(|b| Rsc7::parse(&b).ok())
+        .and_then(|r| textures::decode_dictionary(&r).ok())
+        .unwrap_or_default()
+}
+
+/// Build a name → texture map from every source a vehicle draws from: the txd
+/// embedded in the .yft, the vehicle's own .ytd (+HD), and shared vehshare.ytd.
+/// Names are lowercased; earlier sources win (embedded/vehicle over shared).
+pub fn texture_map(
+    veh: &Archive,
+    keys: &GtaKeys,
+    name: &str,
+    yft_rsc: &Rsc7,
+) -> HashMap<String, DecodedTexture> {
+    let mut map = HashMap::new();
+    let mut add = |texs: Vec<DecodedTexture>| {
+        for t in texs {
+            map.entry(t.name.to_lowercase()).or_insert(t);
+        }
+    };
+
+    let embedded = shaders::embedded_txd_ptr(yft_rsc);
+    if let Ok(texs) = textures::decode_dictionary_at(yft_rsc, embedded) {
+        add(texs);
+    }
+
+    let base = name.trim_end_matches("_hi");
+    add(decode_ytd(veh, keys, &format!("{base}.ytd")));
+    add(decode_ytd(veh, keys, &format!("{base}+hi.ytd")));
+    add(decode_ytd(veh, keys, "vehshare.ytd"));
+    add(decode_ytd(veh, keys, "vehshare_worn.ytd"));
+
+    map
+}
 
 pub fn build_vehicle(
     veh: &Archive,

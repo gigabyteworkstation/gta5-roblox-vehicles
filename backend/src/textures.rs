@@ -13,6 +13,7 @@ use rpf_archive::TextureFormat;
 const ROOT: u64 = 0x5000_0000;
 const DICT_TEX_LIST_PTR: usize = 0x30;
 const DICT_TEX_LIST_COUNT: usize = 0x38; // u16 (NOT u32 — the crate's parse_ytd bug)
+// The TextureDictionary list/count offsets are relative to the dictionary base.
 const TEX_NAME_PTR: usize = 0x28;
 const TEX_WIDTH: usize = 0x50;
 const TEX_HEIGHT: usize = 0x52;
@@ -41,11 +42,19 @@ fn argb_u32_to_rgba(img: &[u32]) -> Vec<u8> {
     out
 }
 
-/// Parse a TextureDictionary (.ytd) directly off the RSC7 paged reader.
-/// Avoids the crate's parse_ytd, which misreads the texture count as u32.
+/// Parse a standalone .ytd (dictionary at the resource root).
 pub fn decode_dictionary(rsc: &Rsc7) -> Result<Vec<DecodedTexture>> {
-    let list_ptr = rsc.u64_at(ROOT, DICT_TEX_LIST_PTR)?;
-    let count = rsc.u16_at(ROOT, DICT_TEX_LIST_COUNT)? as usize;
+    decode_dictionary_at(rsc, ROOT)
+}
+
+/// Parse a TextureDictionary located at `dict_base` (e.g. the txd embedded in a
+/// drawable's ShaderGroup). Avoids the crate's parse_ytd (u32 count bug).
+pub fn decode_dictionary_at(rsc: &Rsc7, dict_base: u64) -> Result<Vec<DecodedTexture>> {
+    if dict_base == 0 {
+        return Ok(vec![]);
+    }
+    let list_ptr = rsc.u64_at(dict_base, DICT_TEX_LIST_PTR)?;
+    let count = rsc.u16_at(dict_base, DICT_TEX_LIST_COUNT)? as usize;
     if count == 0 {
         return Ok(vec![]);
     }
