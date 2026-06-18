@@ -24,6 +24,11 @@ const PARAM_DATAPTR: usize = 0x08; // u64
 
 const TEX_NAME_PTR: usize = 0x28; // grcTexture name pointer
 
+// Shader parameter name hashes (the param's MEANING, not its position).
+const DIFFUSE_SAMPLER: u32 = 4059966321;
+const DIFFUSE_TEX_SAMPLER: u32 = 3004704155;
+const BUMP_SAMPLER: u32 = 1186448975;
+
 fn shader_group(rsc: &Rsc7) -> Result<u64> {
     let drawable = rsc.u64_at(ROOT, FRAGTYPE_DRAWABLE_PTR)?;
     Ok(rsc.u64_at(drawable, DB_SHADERGROUP_PTR)?)
@@ -59,23 +64,39 @@ pub fn shader_infos(rsc: &Rsc7) -> Result<Vec<ShaderInfo>> {
         if sh != 0 {
             let params_ptr = rsc.u64_at(sh, SHADER_PARAMS_PTR).unwrap_or(0);
             let pcount = rsc.u8_at(sh, SHADER_PARAM_COUNT).unwrap_or(0) as usize;
-            let mut tex_names = Vec::new();
-            for i in 0..pcount {
-                let p = params_ptr + i as u64 * PARAM_SIZE;
-                if rsc.u8_at(p, PARAM_DATATYPE).unwrap_or(1) != 0 {
-                    continue;
+            if params_ptr != 0 && pcount > 0 {
+                // Read params; vector params contribute 16*DataType bytes of inline
+                // data after the param array, then the name hashes follow.
+                let mut datatypes = Vec::with_capacity(pcount);
+                let mut dataptrs = Vec::with_capacity(pcount);
+                let mut vec_size = 0u64;
+                for i in 0..pcount {
+                    let p = params_ptr + i as u64 * PARAM_SIZE;
+                    let dt = rsc.u8_at(p, PARAM_DATATYPE).unwrap_or(0);
+                    let dptr = rsc.u64_at(p, PARAM_DATAPTR).unwrap_or(0);
+                    if dt != 0 {
+                        vec_size += 16 * dt as u64;
+                    }
+                    datatypes.push(dt);
+                    dataptrs.push(dptr);
                 }
-                let tex = rsc.u64_at(p, PARAM_DATAPTR).unwrap_or(0);
-                if tex == 0 {
-                    continue;
-                }
-                let n = rsc.str_at(rsc.u64_at(tex, TEX_NAME_PTR).unwrap_or(0));
-                if !n.is_empty() {
-                    tex_names.push(n);
+                let hash_base = params_ptr + pcount as u64 * PARAM_SIZE + vec_size;
+                for i in 0..pcount {
+                    if datatypes[i] != 0 || dataptrs[i] == 0 {
+                        continue; // only texture params
+                    }
+                    let hash = rsc.u32_at(hash_base, i * 4).unwrap_or(0);
+                    let name = rsc.str_at(rsc.u64_at(dataptrs[i], TEX_NAME_PTR).unwrap_or(0));
+                    if name.is_empty() {
+                        continue;
+                    }
+                    if hash == DIFFUSE_SAMPLER || hash == DIFFUSE_TEX_SAMPLER {
+                        info.diffuse = Some(name);
+                    } else if hash == BUMP_SAMPLER {
+                        info.normal = Some(name);
+                    }
                 }
             }
-            info.diffuse = tex_names.first().cloned();
-            info.normal = tex_names.get(1).cloned();
         }
         out.push(info);
     }

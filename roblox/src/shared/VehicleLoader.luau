@@ -42,7 +42,10 @@ local function axisCFrame(pos: Vector3, axis: Vector3): CFrame
 	return CFrame.fromMatrix(pos, axis, y, z)
 end
 
--- Bake each texture into static content once (keyed by 0-based wire index).
+-- Make a Content for each texture (keyed by 0-based wire index). NOTE: static
+-- DataModel content isn't supported for EditableImage yet, so we keep the live
+-- EditableImage via Content.fromObject (switch to CreateDataModelContentAsync
+-- once supported, to free the image budget).
 local function buildTextureCache(vehicle: VehicleWire.Vehicle): { [number]: Content }
 	local cache: { [number]: Content } = {}
 	for i, t in vehicle.textures do
@@ -52,11 +55,7 @@ local function buildTextureCache(vehicle: VehicleWire.Vehicle): { [number]: Cont
 			local buf = buffer.create(size)
 			buffer.copy(buf, 0, vehicle.buffer, t.rgbaOffset, size)
 			img:WritePixelsBuffer(Vector2.zero, Vector2.new(t.width, t.height), buf)
-			local res, content = AssetService:CreateDataModelContentAsync(Content.fromObject(img))
-			img:Destroy()
-			if res == Enum.CreateContentResult.Success then
-				cache[i - 1] = content -- wire textureIndex is 0-based
-			end
+			cache[i - 1] = Content.fromObject(img) -- wire textureIndex is 0-based
 		end
 	end
 	return cache
@@ -140,12 +139,12 @@ local function applyMaterial(part: MeshPart, cache: { [number]: Content }, geom:
 	if not diffuse then
 		return
 	end
-	local sa = Instance.new("SurfaceAppearance")
-	sa.ColorMap = diffuse
+	local saData: { [string]: any } = { ColorMap = diffuse }
 	local normal = cache[geom.normalMapIndex]
 	if normal then
-		sa.NormalMap = normal
+		saData.NormalMap = normal
 	end
+	local sa = AssetService:CreateSurfaceAppearanceAsync(saData)
 	sa.AlphaMode = if geom.glass then Enum.AlphaMode.Transparency else Enum.AlphaMode.Overlay
 	sa.Parent = part
 end
