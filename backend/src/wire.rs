@@ -124,7 +124,7 @@ pub fn serialize(
 ) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
-    w.u8(6);
+    w.u8(7);
     w.u8(0);
     w.u16(0);
     w.u32(parts.len() as u32);
@@ -139,6 +139,9 @@ pub fn serialize(
         let name = p.name.as_bytes();
         w.u16(name.len() as u16);
         w.raw(name);
+        let parent = p.parent.as_bytes();
+        w.u16(parent.len() as u16);
+        w.raw(parent);
         w.u8(p.articulated as u8);
         w.u8(0);
         if let Some(h) = &p.hinge {

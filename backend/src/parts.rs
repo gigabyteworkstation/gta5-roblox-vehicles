@@ -16,6 +16,7 @@ pub struct Hinge {
 
 pub struct Part {
     pub name: String, // "body" or the bone name
+    pub parent: String, // parent part name (GTA bone hierarchy); "" = top
     pub articulated: bool,
     pub hinge: Option<Hinge>,
     pub geometries: Vec<Geometry>,
@@ -175,9 +176,34 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
                 Hinge { pos, axis, min_angle: open.min(0.0), max_angle: open.max(0.0) }
             });
 
-            Part { articulated: hinge.is_some(), name, hinge, geometries }
+            Part { articulated: hinge.is_some(), name, parent: String::new(), hinge, geometries }
         })
         .collect();
+
+    // Parent each part to its bone's parent part (GTA hierarchy). Catch-alls
+    // (body/wheel) attach to the root bone.
+    let root_name = bones
+        .iter()
+        .find(|b| b.parent < 0)
+        .map(|b| b.name.clone())
+        .unwrap_or_default();
+    for p in parts.iter_mut() {
+        p.parent = if p.name == "body" || p.name == "wheel" {
+            if p.name == root_name { String::new() } else { root_name.clone() }
+        } else if let Some(i) = bones.iter().position(|b| b.name == p.name) {
+            let pi = bones[i].parent;
+            if pi >= 0 && (pi as usize) < bones.len() {
+                resolve_part(bones, pi as u16)
+            } else {
+                String::new() // root
+            }
+        } else {
+            root_name.clone()
+        };
+        if p.parent == p.name {
+            p.parent = String::new(); // avoid self-parenting
+        }
+    }
 
     // Center the wheel mesh on its own origin so the client can instance it at
     // each wheel bone.

@@ -30,6 +30,7 @@ export type Hinge = {
 
 export type Part = {
 	name: string,
+	parent: string, -- parent part name (GTA bone hierarchy); "" = top
 	articulated: boolean,
 	hinge: Hinge?,
 	geometries: { Geometry },
@@ -106,6 +107,8 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 	for i = 1, partCount do
 		local nameLen = r:u16()
 		local name = r:fixedString(nameLen)
+		local parentLen = r:u16()
+		local parent = r:fixedString(parentLen)
 		local articulated = r:u8() == 1
 		r:u8()
 
@@ -129,7 +132,7 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 			geometries[j] = readGeometry(r)
 		end
 
-		parts[i] = { name = name, articulated = articulated, hinge = hinge, geometries = geometries }
+		parts[i] = { name = name, parent = parent, articulated = articulated, hinge = hinge, geometries = geometries }
 	end
 
 	local textures: { Texture } = table.create(texCount) :: { Texture }

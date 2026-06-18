@@ -161,7 +161,7 @@ end
 -- (the car's lateral axis) so it can spin/roll.
 local function buildWheels(
 	vehicle: VehicleWire.Vehicle,
-	model: Model,
+	container: Instance,
 	bodyBase: BasePart?,
 	cache: { [number]: Content }
 ): { BasePart }
@@ -185,12 +185,12 @@ local function buildWheels(
 		if part then
 			applyMaterial(part, cache, wheelGeoms[1])
 			part.Anchored = true
-			part.CanCollide = true
+			part.CanCollide = false
 			part.Name = "wheel"
 			local pos = rageVec(wheel.pos)
 			local rot = if wheel.mirror then CFrame.Angles(0, math.pi, 0) else CFrame.identity
 			part.CFrame = CFrame.new(pos) * rot
-			part.Parent = model
+			part.Parent = container
 
 			-- Spin hinge about the axle (car lateral axis = world X).
 			local cf = axisCFrame(pos, Vector3.xAxis)
@@ -220,18 +220,33 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	local model = Instance.new("Model")
 	model.Name = name
 
-	-- Body: anchored, split by texture. The "wheel" part is handled separately
-	-- (instanced at the four wheel bones).
+	-- One Model per bone-part (clean names + GTA hierarchy nesting). Texture
+	-- sub-meshes live inside their part's Model.
+	local partModels: { [string]: Model } = {}
+	local function partModel(pname: string): Model
+		local m = partModels[pname]
+		if not m then
+			m = Instance.new("Model")
+			m.Name = pname
+			m.Parent = model
+			partModels[pname] = m
+		end
+		return m
+	end
+
+	-- Body: anchored, split by texture. The "wheel" part is instanced separately.
 	local bodyBase: BasePart? = nil
 	for _, p in vehicle.parts do
 		if not p.articulated and p.name ~= "wheel" then
+			local container = partModel(p.name)
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
 					part.Anchored = true
+					part.CanCollide = false
 					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
-					part.Parent = model
+					part.Parent = container
 					if not bodyBase then
 						bodyBase = part
 					end
@@ -246,6 +261,7 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	for _, p in vehicle.parts do
 		if p.articulated and p.hinge and bodyBase then
 			local h = p.hinge
+			local container = partModel(p.name)
 			local root: BasePart? = nil
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
@@ -254,7 +270,7 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 					part.CanCollide = false
 					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
-					part.Parent = model
+					part.Parent = container
 					table.insert(articulated, part)
 					if not root then
 						root = part
@@ -292,7 +308,15 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
-	local wheels = buildWheels(vehicle, model, bodyBase, cache)
+	local wheels = buildWheels(vehicle, partModel("wheels"), bodyBase, cache)
+
+	-- Nest part Models per the GTA bone hierarchy (chassis → doors, etc.).
+	for _, p in vehicle.parts do
+		local m = partModels[p.name]
+		if m and p.parent ~= "" and partModels[p.parent] and p.parent ~= p.name then
+			m.Parent = partModels[p.parent]
+		end
+	end
 
 	model.Parent = parent or workspace
 	if pivot then
