@@ -188,17 +188,17 @@ local function buildWheels(
 			part.CanCollide = false
 			part.Name = "wheel"
 			local pos = rageVec(wheel.pos)
-			local rot = if wheel.mirror then CFrame.Angles(0, math.pi, 0) else CFrame.identity
-			part.CFrame = CFrame.new(pos) * rot
+			part.CFrame = CFrame.new(pos)
 			part.Parent = container
 
-			-- Spin hinge about the axle (car lateral axis = world X).
-			local cf = axisCFrame(pos, Vector3.xAxis)
+			-- Spin hinge about the axle (car lateral axis = world X). a0 sits on
+			-- the body at the wheel position; a1 sits at the wheel's LOCAL origin
+			-- (the mesh is centered on the axle).
 			local a0 = Instance.new("Attachment")
-			a0.WorldCFrame = cf
+			a0.WorldCFrame = axisCFrame(pos, Vector3.xAxis)
 			a0.Parent = bodyBase
 			local a1 = Instance.new("Attachment")
-			a1.WorldCFrame = cf
+			a1.CFrame = axisCFrame(Vector3.zero, Vector3.xAxis) -- local, at the axle
 			a1.Parent = part
 			local hinge = Instance.new("HingeConstraint")
 			hinge.Name = "wheel_spin"
@@ -220,25 +220,24 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	local model = Instance.new("Model")
 	model.Name = name
 
-	-- One Model per bone-part (clean names + GTA hierarchy nesting). Texture
-	-- sub-meshes live inside their part's Model.
-	local partModels: { [string]: Model } = {}
-	local function partModel(pname: string): Model
-		local m = partModels[pname]
-		if not m then
-			m = Instance.new("Model")
-			m.Name = pname
-			m.Parent = model
-			partModels[pname] = m
+	-- Each bone-part's FIRST MeshPart is its representative; the part's other
+	-- texture sub-meshes parent under it, and child bone-parts parent under the
+	-- parent bone's representative (GTA bone hierarchy, MeshPart→MeshPart).
+	local rep: { [string]: BasePart } = {}
+	local function place(pname: string, part: BasePart)
+		local r = rep[pname]
+		if r then
+			part.Parent = r
+		else
+			rep[pname] = part
+			part.Parent = model
 		end
-		return m
 	end
 
 	-- Body: anchored, split by texture. The "wheel" part is instanced separately.
 	local bodyBase: BasePart? = nil
 	for _, p in vehicle.parts do
 		if not p.articulated and p.name ~= "wheel" then
-			local container = partModel(p.name)
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
@@ -246,7 +245,7 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 					part.CanCollide = false
 					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
-					part.Parent = container
+					place(p.name, part)
 					if not bodyBase then
 						bodyBase = part
 					end
@@ -261,7 +260,6 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	for _, p in vehicle.parts do
 		if p.articulated and p.hinge and bodyBase then
 			local h = p.hinge
-			local container = partModel(p.name)
 			local root: BasePart? = nil
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
@@ -270,7 +268,7 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 					part.CanCollide = false
 					applyMaterial(part, cache, geoms[1])
 					part.Name = p.name
-					part.Parent = container
+					place(p.name, part)
 					table.insert(articulated, part)
 					if not root then
 						root = part
@@ -308,13 +306,14 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
-	local wheels = buildWheels(vehicle, partModel("wheels"), bodyBase, cache)
+	local wheels = buildWheels(vehicle, bodyBase or model, bodyBase, cache)
 
-	-- Nest part Models per the GTA bone hierarchy (chassis → doors, etc.).
+	-- Parent each part's representative under its parent part's representative
+	-- (GTA bone hierarchy). Done last so all reps exist.
 	for _, p in vehicle.parts do
-		local m = partModels[p.name]
-		if m and p.parent ~= "" and partModels[p.parent] and p.parent ~= p.name then
-			m.Parent = partModels[p.parent]
+		local r = rep[p.name]
+		if r and p.parent ~= "" and rep[p.parent] and p.parent ~= p.name then
+			r.Parent = rep[p.parent]
 		end
 	end
 
