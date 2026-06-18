@@ -155,6 +155,64 @@ local function applyMaterial(part: MeshPart, cache: { [number]: Content }, geom:
 	end
 end
 
+-- Instance the centered "wheel" mesh at each wheel bone. Right-side wheels are
+-- rotated 180° about up so the outer face points out (GTA mirrors the mesh).
+-- Each wheel attaches to the body via a free HingeConstraint about the axle
+-- (the car's lateral axis) so it can spin/roll.
+local function buildWheels(
+	vehicle: VehicleWire.Vehicle,
+	model: Model,
+	bodyBase: BasePart?,
+	cache: { [number]: Content }
+): { BasePart }
+	local out: { BasePart } = {}
+	if not bodyBase then
+		return out
+	end
+	local wheelGeoms: { VehicleWire.Geometry }? = nil
+	for _, p in vehicle.parts do
+		if p.name == "wheel" then
+			wheelGeoms = p.geometries
+			break
+		end
+	end
+	if not wheelGeoms then
+		return out
+	end
+
+	for _, wheel in vehicle.wheels do
+		local part = buildPartMesh(vehicle.buffer, wheelGeoms)
+		if part then
+			applyMaterial(part, cache, wheelGeoms[1])
+			part.Anchored = true
+			part.CanCollide = true
+			part.Name = "wheel"
+			local pos = rageVec(wheel.pos)
+			local rot = if wheel.mirror then CFrame.Angles(0, math.pi, 0) else CFrame.identity
+			part.CFrame = CFrame.new(pos) * rot
+			part.Parent = model
+
+			-- Spin hinge about the axle (car lateral axis = world X).
+			local cf = axisCFrame(pos, Vector3.xAxis)
+			local a0 = Instance.new("Attachment")
+			a0.WorldCFrame = cf
+			a0.Parent = bodyBase
+			local a1 = Instance.new("Attachment")
+			a1.WorldCFrame = cf
+			a1.Parent = part
+			local hinge = Instance.new("HingeConstraint")
+			hinge.Name = "wheel_spin"
+			hinge.Attachment0 = a0
+			hinge.Attachment1 = a1
+			hinge.ActuatorType = Enum.ActuatorType.None -- free spin
+			hinge.Parent = part
+
+			table.insert(out, part)
+		end
+	end
+	return out
+end
+
 function VehicleLoader.build(data: buffer | string, name: string, parent: Instance?, pivot: CFrame?): Model
 	local vehicle = VehicleWire.parse(data)
 	local cache = buildTextureCache(vehicle)
@@ -162,10 +220,11 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 	local model = Instance.new("Model")
 	model.Name = name
 
-	-- Body: anchored, split by texture.
+	-- Body: anchored, split by texture. The "wheel" part is handled separately
+	-- (instanced at the four wheel bones).
 	local bodyBase: BasePart? = nil
 	for _, p in vehicle.parts do
-		if not p.articulated then
+		if not p.articulated and p.name ~= "wheel" then
 			for _, geoms in groupByTexture(p.geometries) do
 				local part = buildPartMesh(vehicle.buffer, geoms)
 				if part then
@@ -233,12 +292,18 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
+	local wheels = buildWheels(vehicle, model, bodyBase, cache)
+
 	model.Parent = parent or workspace
 	if pivot then
 		model:PivotTo(pivot)
 	end
+	-- Release dynamic parts now that everything is positioned.
 	for _, r in articulated do
 		r.Anchored = false
+	end
+	for _, w in wheels do
+		w.Anchored = false
 	end
 
 	return model

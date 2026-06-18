@@ -140,12 +140,18 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
     let _ = bone_name;
     let mut groups: HashMap<String, HashMap<usize, Vec<(usize, usize, usize)>>> = HashMap::new();
     for (gi, g) in mesh.geometries.iter().enumerate() {
+        // The shared wheel mesh (physics child) goes to its own "wheel" part.
+        let force_wheel = g.part == "wheel";
         let idx = &g.indices;
         for t in (0..idx.len().saturating_sub(2)).step_by(3) {
             let (a, b, c) = (idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize);
-            let name = match triangle_bone(g, a, b, c) {
-                Some(bi) => resolve_part(bones, bi),
-                None => "body".to_string(),
+            let name = if force_wheel {
+                "wheel".to_string()
+            } else {
+                match triangle_bone(g, a, b, c) {
+                    Some(bi) => resolve_part(bones, bi),
+                    None => "body".to_string(),
+                }
             };
             groups.entry(name).or_default().entry(gi).or_default().push((a, b, c));
         }
@@ -172,6 +178,30 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
             Part { articulated: hinge.is_some(), name, hinge, geometries }
         })
         .collect();
+
+    // Center the wheel mesh on its own origin so the client can instance it at
+    // each wheel bone.
+    for p in parts.iter_mut().filter(|p| p.name == "wheel") {
+        let (mut sx, mut sy, mut sz, mut n) = (0f64, 0f64, 0f64, 0u64);
+        for g in &p.geometries {
+            for pos in &g.positions {
+                sx += pos[0] as f64;
+                sy += pos[1] as f64;
+                sz += pos[2] as f64;
+                n += 1;
+            }
+        }
+        if n > 0 {
+            let c = [(sx / n as f64) as f32, (sy / n as f64) as f32, (sz / n as f64) as f32];
+            for g in &mut p.geometries {
+                for pos in &mut g.positions {
+                    pos[0] -= c[0];
+                    pos[1] -= c[1];
+                    pos[2] -= c[2];
+                }
+            }
+        }
+    }
 
     // Non-articulated parts first (so the client has a body base before hinges).
     parts.sort_by_key(|p| (p.articulated, p.name.clone()));

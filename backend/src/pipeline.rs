@@ -119,5 +119,17 @@ pub fn build_vehicle(
         }
     }
 
-    Ok(wire::serialize(&grouped, &textures, &materials))
+    // Wheel bone positions (wheel_lf/rf/lr/rr) to instance the "wheel" part at.
+    // Right side (wheel_r*) is mirrored.
+    let wheels: Vec<([f32; 3], bool)> = bones
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.name.starts_with("wheel_"))
+        .map(|(i, b)| {
+            let pos = world.get(i).map(|(p, _)| *p).unwrap_or([0.0; 3]);
+            (pos, b.name.starts_with("wheel_r"))
+        })
+        .collect();
+
+    Ok(wire::serialize(&grouped, &textures, &materials, &wheels))
 }

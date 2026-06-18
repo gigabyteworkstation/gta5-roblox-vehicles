@@ -37,10 +37,13 @@ export type Part = {
 
 export type Texture = { name: string, width: number, height: number, rgbaOffset: number }
 
+export type Wheel = { pos: Vector3, mirror: boolean } -- pos in RAGE space
+
 export type Vehicle = {
 	buffer: buffer,
 	parts: { Part },
 	textures: { Texture },
+	wheels: { Wheel },
 }
 
 local MAGIC = "GVEH"
@@ -97,6 +100,7 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 	r:skip(3)
 	local partCount = r:u32()
 	local texCount = r:u32()
+	local wheelCount = r:u32()
 
 	local parts: { Part } = table.create(partCount) :: { Part }
 	for i = 1, partCount do
@@ -139,7 +143,15 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 		textures[i] = { name = name, width = width, height = height, rgbaOffset = rgbaOffset }
 	end
 
-	return { buffer = buf, parts = parts, textures = textures }
+	local wheels: { Wheel } = table.create(wheelCount) :: { Wheel }
+	for i = 1, wheelCount do
+		local x, y, z = r:f32(), r:f32(), r:f32()
+		local mirror = r:u8() == 1
+		r:skip(3)
+		wheels[i] = { pos = Vector3.new(x, y, z), mirror = mirror }
+	end
+
+	return { buffer = buf, parts = parts, textures = textures, wheels = wheels }
 end
 
 return VehicleWire

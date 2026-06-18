@@ -200,13 +200,11 @@ pub fn decode(rsc: &Rsc7) -> Result<Mesh> {
                         continue;
                     }
                     let bone_tag = rsc.u16_at(child, CHILD_BONETAG).unwrap_or(0);
-                    let mat = if transforms_ptr != 0 {
-                        read_matrix(rsc, transforms_ptr, i).ok()
-                    } else {
-                        None
-                    };
+                    // A physics child with geometry is the (single, shared) WHEEL
+                    // mesh. Decode it in LOCAL space (no placement transform) so
+                    // the client can instance it at all four wheel bones.
                     let before = geometries.len();
-                    decode_drawable(rsc, d1, mat.as_ref(), &format!("child{i}"), &mut geometries)?;
+                    decode_drawable(rsc, d1, None, "wheel", &mut geometries)?;
                     let added = geometries.len() - before;
                     if added > 0 {
                         children.push((i, bone_tag, added));

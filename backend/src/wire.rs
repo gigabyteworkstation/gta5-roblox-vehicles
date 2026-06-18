@@ -114,15 +114,22 @@ fn write_geometry(w: &mut W, g: &Geometry, mat: Material) {
     }
 }
 
-/// `materials[shader_index]` = the material for that shader.
-pub fn serialize(parts: &[Part], texs: &[DecodedTexture], materials: &[Material]) -> Vec<u8> {
+/// `materials[shader_index]` = the material for that shader. `wheels` are the
+/// (RAGE-space position, mirror) of each wheel bone to instance the "wheel" part.
+pub fn serialize(
+    parts: &[Part],
+    texs: &[DecodedTexture],
+    materials: &[Material],
+    wheels: &[([f32; 3], bool)],
+) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
-    w.u8(5);
+    w.u8(6);
     w.u8(0);
     w.u16(0);
     w.u32(parts.len() as u32);
     w.u32(texs.len() as u32);
+    w.u32(wheels.len() as u32);
 
     let mat_for = |g: &Geometry| -> Material {
         materials.get(g.shader_index as usize).copied().unwrap_or(Material::NONE)
@@ -157,6 +164,15 @@ pub fn serialize(parts: &[Part], texs: &[DecodedTexture], materials: &[Material]
         w.u16(t.width as u16);
         w.u16(t.height as u16);
         w.raw(&t.rgba);
+    }
+
+    for (pos, mirror) in wheels {
+        w.f32(pos[0]);
+        w.f32(pos[1]);
+        w.f32(pos[2]);
+        w.u8(*mirror as u8);
+        w.u8(0);
+        w.u16(0);
     }
 
     w.b
