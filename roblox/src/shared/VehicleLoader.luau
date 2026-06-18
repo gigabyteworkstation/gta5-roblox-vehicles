@@ -177,26 +177,41 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 		end
 	end
 
-	-- Articulated: one merged part (dominant texture) + Servo hinge.
+	-- Articulated: split by texture (welded into one assembly), Servo hinge on
+	-- the root sub-part.
 	local articulated: { BasePart } = {}
 	for _, p in vehicle.parts do
 		if p.articulated and p.hinge and bodyBase then
 			local h = p.hinge
-			local part = buildPartMesh(vehicle.buffer, p.geometries)
-			if part then
-				part.Anchored = true
-				part.CanCollide = false
-				applyTexture(part, cache, dominantTexture(p.geometries))
-				part.Name = p.name
-				part.Parent = model
+			local root: BasePart? = nil
+			for ti, geoms in groupByTexture(p.geometries) do
+				local part = buildPartMesh(vehicle.buffer, geoms)
+				if part then
+					part.Anchored = true
+					part.CanCollide = false
+					applyTexture(part, cache, ti)
+					part.Name = p.name
+					part.Parent = model
+					table.insert(articulated, part)
+					if not root then
+						root = part
+					else
+						local weld = Instance.new("WeldConstraint")
+						weld.Part0 = root
+						weld.Part1 = part
+						weld.Parent = root
+					end
+				end
+			end
 
+			if root then
 				local cf = axisCFrame(rageVec(h.pos), rageDir(h.axis))
 				local a0 = Instance.new("Attachment")
 				a0.WorldCFrame = cf
 				a0.Parent = bodyBase
 				local a1 = Instance.new("Attachment")
 				a1.WorldCFrame = cf
-				a1.Parent = part
+				a1.Parent = root
 
 				local hinge = Instance.new("HingeConstraint")
 				hinge.Name = p.name
@@ -209,9 +224,7 @@ function VehicleLoader.build(data: buffer | string, name: string, parent: Instan
 				hinge.ServoMaxTorque = 100000
 				hinge.AngularSpeed = 2
 				hinge.TargetAngle = 0
-				hinge.Parent = part
-
-				table.insert(articulated, part)
+				hinge.Parent = root
 			end
 		end
 	end

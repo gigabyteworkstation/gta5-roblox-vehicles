@@ -103,6 +103,22 @@ pub fn decode_dictionary_at(rsc: &Rsc7, dict_base: u64) -> Result<Vec<DecodedTex
                 }
                 true
             }
+            // L8: luminance (grey), opaque. e.g. plate font / number masks.
+            TextureFormat::L8 => {
+                for (i, px) in img.iter_mut().enumerate() {
+                    let l = *data.get(i).unwrap_or(&0) as u32;
+                    *px = 0xFF00_0000 | (l << 16) | (l << 8) | l;
+                }
+                true
+            }
+            // A8: alpha-only mask (white with per-pixel alpha).
+            TextureFormat::A8 => {
+                for (i, px) in img.iter_mut().enumerate() {
+                    let a = *data.get(i).unwrap_or(&0) as u32;
+                    *px = (a << 24) | 0x00FF_FFFF;
+                }
+                true
+            }
             _ => false,
         };
         if !decoded {

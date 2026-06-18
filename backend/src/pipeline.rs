@@ -80,7 +80,8 @@ pub fn build_vehicle(
                 Some(&i) => i,
                 None => {
                     let i = textures.len() as i16;
-                    textures.push(textures::downscale(tex, 128));
+                    // Full resolution (downscale is a no-op above this size).
+                    textures.push(textures::downscale(tex, 8192));
                     by_name.insert(key, i);
                     i
                 }
