@@ -20,7 +20,7 @@ pub fn build_vehicle(
     let r = Rsc7::parse(&rsc)?;
     let mesh = yft::decode(&r)?;
     let bones = skeleton::parse(&r)?;
-    let bone_world = skeleton::world_positions(&bones);
+    let bone_world = skeleton::world_transforms(&bones);
 
     // Textures: base dict + HD dict (named off the base vehicle, not the _hi frag).
     // Off by default — they're large (uncompressed RGBA) and not bound to

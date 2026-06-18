@@ -30,7 +30,8 @@
 //! Bone[]:
 //!   u16  nameLen, name bytes (utf8)
 //!   i16  parentIndex (-1 = root)
-//!   f32  worldPos[3]   (RAGE space; client applies the same axis-swap as verts)
+//!   f32  worldPos[3]    (RAGE space; client applies the same axis-swap as verts)
+//!   f32  worldQuat[4]   (x,y,z,w world rest rotation, RAGE space)
 
 use crate::skeleton::Bone;
 use crate::textures::DecodedTexture;
@@ -63,7 +64,7 @@ pub fn serialize(
     mesh: &Mesh,
     texs: &[DecodedTexture],
     bones: &[Bone],
-    bone_world: &[[f32; 3]],
+    bone_world: &[([f32; 3], [f32; 4])],
 ) -> Vec<u8> {
     let mut w = W { b: Vec::with_capacity(4 << 20) };
     w.u32(MAGIC);
@@ -129,14 +130,18 @@ pub fn serialize(
         w.raw(&t.rgba);
     }
 
-    for (b, wp) in bones.iter().zip(bone_world.iter()) {
+    for (b, (pos, quat)) in bones.iter().zip(bone_world.iter()) {
         let name = b.name.as_bytes();
         w.u16(name.len() as u16);
         w.raw(name);
         w.u16(b.parent as u16); // i16 bit pattern
-        w.f32(wp[0]);
-        w.f32(wp[1]);
-        w.f32(wp[2]);
+        w.f32(pos[0]);
+        w.f32(pos[1]);
+        w.f32(pos[2]);
+        w.f32(quat[0]);
+        w.f32(quat[1]);
+        w.f32(quat[2]);
+        w.f32(quat[3]);
     }
 
     w.b

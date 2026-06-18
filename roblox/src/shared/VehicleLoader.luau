@@ -26,8 +26,14 @@ local function ragePos(buf: buffer, off: number): Vector3
 	return Vector3.new(x, z, -y) * STUDS_PER_METER
 end
 
-local function rageSwap(v: Vector3): Vector3
-	return Vector3.new(v.X, v.Z, -v.Y) * STUDS_PER_METER
+-- The RAGE→Roblox axis swap (x,y,z)→(x,z,-y) is a -90° rotation about X.
+-- Applied to a full bone CFrame: orientation rotates by AXIS_SWAP, position
+-- swaps + scales — consistent with ragePos() on the vertices.
+local AXIS_SWAP = CFrame.Angles(-math.rad(90), 0, 0)
+
+local function toRobloxCF(rageCF: CFrame): CFrame
+	local c = AXIS_SWAP * rageCF
+	return CFrame.new(c.Position * STUDS_PER_METER) * c.Rotation
 end
 
 type UsedBone = { name: string, cframe: CFrame }
@@ -81,7 +87,7 @@ local function buildGeometry(
 					return id
 				end
 				local b = bones[skelIdx + 1]
-				local cf = if b then CFrame.new(rageSwap(b.pos)) else CFrame.identity
+				local cf = if b then toRobloxCF(b.cframe) else CFrame.identity
 				local name = if b then b.name else `bone_{skelIdx}`
 				-- Omit ParentId entirely: a root bone (flat rig, world-space rest
 				-- CFrames). Passing -1 errors "Unknown id"; root = omitted/0.

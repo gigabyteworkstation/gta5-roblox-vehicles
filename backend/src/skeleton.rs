@@ -72,28 +72,58 @@ pub fn parse(rsc: &Rsc7) -> Result<Vec<Bone>> {
     Ok(bones)
 }
 
-/// World-space rest position of each bone, by accumulating local translations up
-/// the parent chain. Ignores rotation — fine for vehicle bones, which are
-/// axis-aligned at rest, and good enough for a first skinned pass (rest pose is
-/// undistorted regardless; rotation only affects deformation quality).
-pub fn world_positions(bones: &[Bone]) -> Vec<[f32; 3]> {
-    let mut world = vec![[0f32; 3]; bones.len()];
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let (ax, ay, az, aw) = (a[0], a[1], a[2], a[3]);
+    let (bx, by, bz, bw) = (b[0], b[1], b[2], b[3]);
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+fn quat_rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    let tx = 2.0 * (y * v[2] - z * v[1]);
+    let ty = 2.0 * (z * v[0] - x * v[2]);
+    let tz = 2.0 * (x * v[1] - y * v[0]);
+    [
+        v[0] + w * tx + (y * tz - z * ty),
+        v[1] + w * ty + (z * tx - x * tz),
+        v[2] + w * tz + (x * ty - y * tx),
+    ]
+}
+
+fn quat_norm(q: [f32; 4]) -> [f32; 4] {
+    let m = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if m > 1e-8 {
+        [q[0] / m, q[1] / m, q[2] / m, q[3] / m]
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+/// Full world rest transform (position, quaternion x,y,z,w) of each bone, by
+/// composing local transforms down the hierarchy. Assumes parents precede their
+/// children (true for GTA skeletons). The client converts these through the
+/// RAGE→Roblox axis swap, consistently with the vertices.
+pub fn world_transforms(bones: &[Bone]) -> Vec<([f32; 3], [f32; 4])> {
+    let mut world = vec![([0f32; 3], [0.0, 0.0, 0.0, 1.0f32]); bones.len()];
     for i in 0..bones.len() {
-        let mut acc = bones[i].translation;
-        let mut p = bones[i].parent;
-        let mut guard = 0;
-        while p >= 0 && (p as usize) < bones.len() {
-            let pb = &bones[p as usize];
-            acc[0] += pb.translation[0];
-            acc[1] += pb.translation[1];
-            acc[2] += pb.translation[2];
-            p = pb.parent;
-            guard += 1;
-            if guard > 256 {
-                break;
-            }
+        let lt = bones[i].translation;
+        let lr = bones[i].rotation;
+        let p = bones[i].parent;
+        if p < 0 || (p as usize) >= bones.len() {
+            world[i] = (lt, quat_norm(lr));
+        } else {
+            let (pt, pr) = world[p as usize];
+            let rt = quat_rotate(pr, lt);
+            world[i] = (
+                [pt[0] + rt[0], pt[1] + rt[1], pt[2] + rt[2]],
+                quat_norm(quat_mul(pr, lr)),
+            );
         }
-        world[i] = acc;
     }
     world
 }

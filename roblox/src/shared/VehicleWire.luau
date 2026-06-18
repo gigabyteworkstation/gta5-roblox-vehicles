@@ -31,7 +31,7 @@ export type Texture = {
 export type Bone = {
 	name: string,
 	parent: number, -- index into bones (1-based here); -1 = root
-	pos: Vector3, -- RAGE-space rest position
+	cframe: CFrame, -- RAGE-space world rest CFrame (position + rotation)
 }
 
 export type Vehicle = {
@@ -117,10 +117,9 @@ function VehicleWire.parse(data: buffer | string): Vehicle
 		local nameLen = r:u16()
 		local name = r:fixedString(nameLen)
 		local parent = r:i16()
-		local x = r:f32()
-		local y = r:f32()
-		local z = r:f32()
-		bones[i] = { name = name, parent = parent, pos = Vector3.new(x, y, z) }
+		local px, py, pz = r:f32(), r:f32(), r:f32()
+		local qx, qy, qz, qw = r:f32(), r:f32(), r:f32(), r:f32()
+		bones[i] = { name = name, parent = parent, cframe = CFrame.new(px, py, pz, qx, qy, qz, qw) }
 	end
 
 	return { buffer = buf, geometries = geometries, textures = textures, bones = bones }
