@@ -9,6 +9,7 @@ export type BinaryReader = {
 	offset: number,
 	u8: (self: BinaryReader) -> number,
 	u16: (self: BinaryReader) -> number,
+	i16: (self: BinaryReader) -> number,
 	u32: (self: BinaryReader) -> number,
 	f32: (self: BinaryReader) -> number,
 	fixedString: (self: BinaryReader, n: number) -> string,
@@ -28,6 +29,12 @@ end
 
 function BinaryReader.u16(self: BinaryReader): number
 	local v = buffer.readu16(self.buf, self.offset)
+	self.offset += 2
+	return v
+end
+
+function BinaryReader.i16(self: BinaryReader): number
+	local v = buffer.readi16(self.buf, self.offset)
 	self.offset += 2
 	return v
 end
