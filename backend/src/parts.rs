@@ -111,71 +111,45 @@ pub fn group(mesh: &Mesh, bones: &[Bone], world: &[([f32; 3], [f32; 4])]) -> Vec
     use std::collections::HashMap;
     let bone_name = |idx: u16| bones.get(idx as usize).map(|b| b.name.as_str()).unwrap_or("");
 
-    // Collect triangles per target part name.
-    let mut body: Vec<Geometry> = Vec::new();
-    // part name -> (hinge axis, list of (geom, tris))
-    let mut artic: HashMap<String, Vec<(usize, Vec<(usize, usize, usize)>)>> = HashMap::new();
-
+    // Group EVERY triangle by its bone (GTA groups vehicle meshes by bone).
+    // part name -> (source geometry index -> triangles). Unskinned triangles go
+    // to a "body" catch-all.
+    let mut groups: HashMap<String, HashMap<usize, Vec<(usize, usize, usize)>>> = HashMap::new();
     for (gi, g) in mesh.geometries.iter().enumerate() {
-        // Bucket this geometry's triangles by destination part.
-        let mut body_tris: Vec<(usize, usize, usize)> = Vec::new();
-        let mut part_tris: HashMap<String, Vec<(usize, usize, usize)>> = HashMap::new();
-
         let idx = &g.indices;
         for t in (0..idx.len().saturating_sub(2)).step_by(3) {
             let (a, b, c) = (idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize);
-            let dest = triangle_bone(g, a, b, c)
-                .map(bone_name)
-                .filter(|n| is_articulated(n))
-                .map(|n| n.to_string());
-            match dest {
-                Some(name) => part_tris.entry(name).or_default().push((a, b, c)),
-                None => body_tris.push((a, b, c)),
-            }
-        }
-
-        if !body_tris.is_empty() {
-            body.push(extract(g, &body_tris));
-        }
-        for (name, tris) in part_tris {
-            artic.entry(name).or_default().push((gi, tris));
+            let name = match triangle_bone(g, a, b, c).map(bone_name) {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ => "body".to_string(),
+            };
+            groups.entry(name).or_default().entry(gi).or_default().push((a, b, c));
         }
     }
 
-    let mut parts = vec![Part {
-        name: "body".to_string(),
-        articulated: false,
-        hinge: None,
-        geometries: body,
-    }];
+    let bone_index = |name: &str| bones.iter().position(|b| b.name == name);
 
-    for (name, entries) in artic {
-        let (local_axis, open) = articulated_spec(&name).unwrap_or(([0.0, 0.0, 1.0], 0.4 * PI));
-        // Hinge position + world axis come from the bone's world rest transform:
-        // the local axis rotated into world space (so doors swing along the
-        // raked pillar, etc.).
-        let (pos, axis) = bones
-            .iter()
-            .position(|b| b.name == name)
-            .and_then(|i| world.get(i))
-            .map(|(p, q)| (*p, crate::skeleton::quat_rotate(*q, local_axis)))
-            .unwrap_or(([0.0, 0.0, 0.0], local_axis));
-        let geometries = entries
-            .into_iter()
-            .map(|(gi, tris)| extract(&mesh.geometries[gi], &tris))
-            .collect();
-        parts.push(Part {
-            name,
-            articulated: true,
-            hinge: Some(Hinge {
-                pos,
-                axis,
-                min_angle: open.min(0.0),
-                max_angle: open.max(0.0),
-            }),
-            geometries,
-        });
-    }
+    let mut parts: Vec<Part> = groups
+        .into_iter()
+        .map(|(name, geoms_map)| {
+            let geometries = geoms_map
+                .into_iter()
+                .map(|(gi, tris)| extract(&mesh.geometries[gi], &tris))
+                .collect();
 
+            let hinge = articulated_spec(&name).map(|(local_axis, open)| {
+                let (pos, axis) = bone_index(&name)
+                    .and_then(|i| world.get(i))
+                    .map(|(p, q)| (*p, crate::skeleton::quat_rotate(*q, local_axis)))
+                    .unwrap_or(([0.0, 0.0, 0.0], local_axis));
+                Hinge { pos, axis, min_angle: open.min(0.0), max_angle: open.max(0.0) }
+            });
+
+            Part { articulated: hinge.is_some(), name, hinge, geometries }
+        })
+        .collect();
+
+    // Non-articulated parts first (so the client has a body base before hinges).
+    parts.sort_by_key(|p| (p.articulated, p.name.clone()));
     parts
 }
