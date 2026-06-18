@@ -2,6 +2,7 @@
 //! List vehicle assets and extract one vehicle's raw resource bytes.
 
 mod archive;
+mod joints;
 mod parts;
 mod pipeline;
 mod rsc7;
@@ -92,6 +93,11 @@ enum Commands {
 
     /// Print each geometry's shader → diffuse texture name
     Shaders {
+        name: String,
+    },
+
+    /// Parse and print the fragment physics joints (articulation)
+    Joints {
         name: String,
     },
 
@@ -386,6 +392,31 @@ fn run() -> Result<()> {
                 }
             }
             println!("\nresolved {found}/{} used textures ({missing} missing)", seen.len());
+        }
+
+        Commands::Joints { name } => {
+            let yft = format!("{name}.yft");
+            let file = veh.find_file(&yft).with_context(|| format!("{yft} not found"))?;
+            let rsc = veh.extract(file, Some(&keys))?;
+            let r = Rsc7::parse(&rsc)?;
+            let js = joints::parse(&r)?;
+            let tags = joints::link_bone_tags(&r);
+            let bones = skeleton::parse(&r)?;
+            let bone_for_tag = |tag: u16| -> String {
+                bones.iter().find(|b| b.tag == tag).map(|b| b.name.clone()).unwrap_or_else(|| format!("tag{tag}"))
+            };
+            let link = |i: u8| -> String {
+                tags.get(i as usize).map(|&t| bone_for_tag(t)).unwrap_or_else(|| format!("link{i}"))
+            };
+            println!("\n{yft}: {} joints", js.len());
+            for j in &js {
+                let ty = if j.jtype == 0 { "1Dof" } else { "3Dof" };
+                println!("  {ty}  {} -> {}", link(j.parent_link), link(j.child_link));
+                for (k, v) in j.vecs.iter().enumerate() {
+                    let off = 0x20 + k * 16;
+                    println!("    [0x{off:02X}] ({:7.3} {:7.3} {:7.3} {:7.3})", v[0], v[1], v[2], v[3]);
+                }
+            }
         }
 
         Commands::Serve { addr } => {
