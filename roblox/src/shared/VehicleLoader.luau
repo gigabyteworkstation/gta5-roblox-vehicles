@@ -76,15 +76,20 @@ local function groupByTexture(geometries: { VehicleWire.Geometry }): { [number]:
 end
 
 -- Build ONE MeshPart from a list of geometries merged together.
-local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }): MeshPart?
+local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }, mirror: boolean?): MeshPart?
 	local mesh: EditableMesh? = AssetService:CreateEditableMesh()
 	if not mesh then
 		return nil
 	end
+	-- GTA mirrors the right-side wheel by negating the lateral (X) scale. A
+	-- reflection isn't a rigid CFrame, so we bake it into the mesh: negate X on
+	-- positions + normals and reverse triangle winding (keeps faces outward).
+	local sx = if mirror then -1 else 1
 	for _, geom in geometries do
 		local vids = table.create(geom.vertexCount) :: { number }
 		for v = 0, geom.vertexCount - 1 do
-			vids[v] = mesh:AddVertex(ragePosWorld(buf, geom.posOffset + v * 12))
+			local p = ragePosWorld(buf, geom.posOffset + v * 12)
+			vids[v] = mesh:AddVertex(if mirror then Vector3.new(-p.X, p.Y, p.Z) else p)
 		end
 		local nids: { number }? = nil
 		if geom.hasNormals and geom.normalOffset then
@@ -94,7 +99,7 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }):
 				local x = buffer.readf32(buf, off + v * 12)
 				local y = buffer.readf32(buf, off + v * 12 + 4)
 				local z = buffer.readf32(buf, off + v * 12 + 8)
-				arr[v] = mesh:AddNormal(Vector3.new(x, z, -y))
+				arr[v] = mesh:AddNormal(Vector3.new(x * sx, z, -y))
 			end
 			nids = arr
 		end
@@ -113,12 +118,21 @@ local function buildPartMesh(buf: buffer, geometries: { VehicleWire.Geometry }):
 			local a = buffer.readu16(buf, io + t * 2)
 			local b = buffer.readu16(buf, io + (t + 1) * 2)
 			local c = buffer.readu16(buf, io + (t + 2) * 2)
-			local fid = mesh:AddTriangle(vids[a], vids[b], vids[c])
+			-- Reverse winding when mirrored so the reflected faces stay outward.
+			local fid = if mirror then mesh:AddTriangle(vids[a], vids[c], vids[b]) else mesh:AddTriangle(vids[a], vids[b], vids[c])
 			if nids then
-				mesh:SetFaceNormals(fid, { nids[a], nids[b], nids[c] })
+				if mirror then
+					mesh:SetFaceNormals(fid, { nids[a], nids[c], nids[b] })
+				else
+					mesh:SetFaceNormals(fid, { nids[a], nids[b], nids[c] })
+				end
 			end
 			if uvids then
-				mesh:SetFaceUVs(fid, { uvids[a], uvids[b], uvids[c] })
+				if mirror then
+					mesh:SetFaceUVs(fid, { uvids[a], uvids[c], uvids[b] })
+				else
+					mesh:SetFaceUVs(fid, { uvids[a], uvids[b], uvids[c] })
+				end
 			end
 			t += 3
 		end
@@ -180,8 +194,10 @@ local function buildWheels(
 		return out
 	end
 
+	-- Right-side wheels get a mirrored mesh (GTA's negative-scale mirror) so the
+	-- rim's outer face points outward on both sides.
 	for _, wheel in vehicle.wheels do
-		local part = buildPartMesh(vehicle.buffer, wheelGeoms)
+		local part = buildPartMesh(vehicle.buffer, wheelGeoms, wheel.mirror)
 		if part then
 			applyMaterial(part, cache, wheelGeoms[1])
 			part.Anchored = true
